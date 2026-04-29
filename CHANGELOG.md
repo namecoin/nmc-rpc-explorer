@@ -1,18 +1,49 @@
-##### v3.?
-###### Unreleased
+##### v3.5.1
+###### 2025-07-02
 
-* Minor fixes for running against Bitcoin Core v23
-* URL change: /mining-template -> /next-block (redirect is included for compatibility)
-* Homepage additions
+* Minor cleanup
+* Fix self-identified version number
+
+
+##### v3.5.0
+###### 2025-06-23
+
+* Fix for node details page display on 28.0+
+* Tweak display of miner "notes" (disclaimer for Patoshi)
+* Fix for display of JSON-data content
+* New holidays and quotes
+* Updated miner IDs (including removal of 3 probably false positives from the "Patoshi" list)
+* Updated dependencies
+
+
+##### v3.4.0
+###### 2023-06-14
+
+* Breaking changes to the API (see [./api/changelog](/api/changelog))
+* Homepage
+	* New "Next Halving" widget in Network Summary
 	* Show difficulty ATH comparison
 	* Show "Next Block" fullness
+	* Progress bar for difficulty adjustment estimate
+	* Include median fee rate for next-block estimates (also on [/next-block](./next-block))
 	* Show a banner if 'today' is a Bitcoin 'Holiday' (see more below)
-* Tweaks to API, see [/api/changelog](./api/changelog)
+* Minor fixes for running against Bitcoin Core v23
+* Block Analysis: include top "days destroyed" transactions
+* URL change: /mining-template -> /next-block (redirect is included for compatibility)
+* On Extended PubKey pages, include balance data for various address (if Electrum server is configured)
+* New [/next-halving](./next-halving) tool
+* Several new API actions/changes; see [/api/changelog](./api/changelog)
 * New [/holidays](./holidays), a curated list of Bitcoin 'Holidays'
+* Support for different view options on [/fun](./fun)
+* On [/difficulty-history](./difficulty-history), make delta graph honor timespan filtering
+* Proper use of production-ready MemoryStore for session data
 * Support for serving static assets via a configurable CDN
 * Misc fixes for erroneous data display on non-mainnet nodes
 * Switch from fontawesome to bootstrap-icons v1.8.0
+* Refreshed miner-identification database
+* Refreshed "Dark" theme with blues toned down (legacy dark theme still available)
 * UI/UX tweaks
+* Misc minor fixes
 * Updated dependencies
 
 
