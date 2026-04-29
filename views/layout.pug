@@ -1,4 +1,5 @@
 include ./includes/shared-mixins.pug
+include ./includes/tx-mixins.pug
 
 doctype html
 html(lang="en")
@@ -78,6 +79,10 @@ html(lang="en")
 				.collapse.navbar-collapse(id="navbarNav")
 					if (rpcClient)
 						ul.navbar-nav.me-auto
+							if (config.coin === "NMC")
+								li.nav-item
+									a.nav-link(href="./names")
+										span Names
 							if (false)
 								li.nav-item
 									a.nav-link(href="./about")
@@ -171,13 +176,17 @@ html(lang="en")
 										- items.push("local");
 
 									.btn-group.ms-3
-										a.btn.btn-sm.px-3(id="theme-toggler-light", href=`javascript:void(0);` onclick=`toggleTheme(); return false;`, class=(userSettings.uiTheme == "light" ? "btn-primary" : "btn-outline-primary"))
-											i.bi-sun-fill.text-warning
-										a.btn.btn-sm.px-3(id="theme-toggler-dark",href=`javascript:void(0);` onclick=`toggleTheme(); return false;`, class=(userSettings.uiTheme == "light" ? "btn-outline-primary" : "btn-primary"))
-											i.bi-moon
+										- let themeNames = ["light", "dark", "dark-v1"];
+										- let themeIcons = ["bi-sun-fill", "bi-moon-fill", "bi-moon"];
+										- let themeIconColors = ["text-warning", "", ""];
+
+										each themeName, themeIndex in themeNames
+											a.btn.btn-sm.px-3(id=`theme-toggler-${themeName}`, href=`javascript:void(0);` onclick=`activateTheme('${themeName}'); return false;`, class=(userSettings.uiTheme == themeName ? "btn-primary" : "btn-outline-primary"))
+												i(class=themeIcons[themeIndex], class=themeIconColors[themeIndex])
+
 
 									hr.dropdown-divider.mt-2.mb-2
-									span.dropdown-header Dislay Timezone
+									span.dropdown-header Display Timezone
 
 									- var items = ["fa", "sat"];
 									if (config.queryExchangeRates && global.exchangeRates)
@@ -202,7 +211,7 @@ html(lang="en")
 				form.form-inline.d-none.d-lg-inline(method="post", action="./search", style="width: 325px;")
 					input(type="hidden", name="_csrf", value=csrfToken)
 					.input-group
-						input.form-control(type="text", name="query", placeholder="block height/hash, txid, address", value=(query))
+						input.form-control(type="text", name="query", placeholder="block height/hash, txid, address", value=(query), autocapitalize="off", autocomplete="off", autocorrect="off", spellcheck="false")
 						
 						button.btn.btn-primary(type="submit", aria-label="Search")
 							i.bi-search
@@ -210,7 +219,7 @@ html(lang="en")
 				form.form-inline.d-lg-none.w-100.mt-2.mt-md-0(method="post", action="./search")
 					input(type="hidden", name="_csrf", value=csrfToken)
 					.input-group
-						input.form-control(type="text", name="query", placeholder="height/hash/txid...", value=(query))
+						input.form-control(type="text", name="query", placeholder="height/hash/txid...", value=(query), autocapitalize="off", autocomplete="off", autocorrect="off", spellcheck="false")
 						
 						button.btn.btn-primary(type="submit", aria-label="Search")
 							i.bi-search
@@ -243,11 +252,11 @@ html(lang="en")
 
 		footer.footer.border-top.border-primary.bg-header-footer.pt-3.pb-1.px-3.text-white(style="border-width: 5px !important;")
 			.container
-				if (!crawlerBot)
-					.mb-4
+				if (!crawlerBot && global.rpcConnected)
+					.mb-4.mx-6
 						iframe(id="quoteIframe", title="A Bitcoin Quote of the Day", src="./snippet/quote/random", onload="iframeLoaded('quoteIframe');", scrolling="no", height="0", style="width: 100%;")
 
-				hr
+					hr
 
 				
 				.row.mt-4.mb-6
@@ -380,7 +389,7 @@ html(lang="en")
 				console.log(`Performance ID: ${perfId}`);
 
 		if (!homepage)
-			script(src=assetUrl(`./js/highlight.pack.js`), integrity=assetIntegrity("highlight.pack.js"), crossorigin="anonymous")
+			script(src=assetUrl(`./js/highlight.min.js`), integrity=assetIntegrity("highlight.min.js"), crossorigin="anonymous")
 			script.
 				document.addEventListener("DOMContentLoaded", function(event) {
 					hljs.highlightAll();
