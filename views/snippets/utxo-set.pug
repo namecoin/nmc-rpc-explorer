@@ -1,55 +1,138 @@
 include ../includes/shared-mixins.pug
 
-.mt-3
-	+pageTabs(["Details", "JSON"])
+if (!utxoSetSummary)
+	.mt-3
+		.alert.alert-warning.mb-0
+			p.mb-2.fw-bold UTXO Set summary is not available.
+			p.mb-2 The Namecoin/Bitcoin Core RPC `gettxoutsetinfo` either errored, timed out, or returned an unexpected shape. Common causes:
+			ul.mb-2
+				li The node does not have <code>coinstatsindex=1</code> enabled, so each call has to scan the chainstate (slow on Namecoin — typically 60–120s on commodity hardware). Browser AJAX often gives up before the response arrives.
+				li The explorer is running with <code>BTCEXP_SLOW_DEVICE_MODE=true</code> (the default), which intentionally skips this RPC at startup.
+			p.mb-0 Recommended fix: enable <code>coinstatsindex=1</code> in <code>namecoin.conf</code> and restart <code>namecoind</code> (one-time index build, then sub-second responses), then set <code>BTCEXP_SLOW_DEVICE_MODE=false</code> in the explorer .env and restart the explorer.
+else
+	.mt-3
+		+pageTabs(["Details", "JSON"])
 
 
-	div.tab-content
-		+pageTab("Details", true)
-			+contentSection
-				+summaryRow(3)
-					+summaryItem("Last Updated", "The time this UTXO Set snapshot was produced")
-						+timestamp(utxoSetSummary.lastUpdated / 1000, true)
+		div.tab-content
+			+pageTab("Details", true)
+				+contentSection
+					+summaryRow(3)
+						+summaryItem("Last Updated", "The time this UTXO Set snapshot was produced")
+							+timestamp(utxoSetSummary.lastUpdated / 1000)
 
-					+summaryItem("Block Height", "The top block height at the time this UTXO Set snapshot was produced")
-						a(href=`./block-height/${utxoSetSummary.height}`) #{utxoSetSummary.height.toLocaleString()}
+						+summaryItem("Block Height", "The top block height at the time this UTXO Set snapshot was produced")
+							a(href=`./block-height/${utxoSetSummary.height}`) #{utxoSetSummary.height.toLocaleString()}
 
-					+summaryItem("Block Hash", "The top block hash at the time this UTXO Set snapshot was produced")
-						a(href=`./block/${utxoSetSummary.bestblock}`) #{utils.ellipsizeMiddle(utxoSetSummary.bestblock, 12)}
-						+copyTextButton(utxoSetSummary.bestblock)
-				
-				hr.mt-3.mb-3
-				
-				+summaryRow(2 + (utxoSetSummary.transactions ? 1 : 0) + (utxoSetSummary.disk_size ? 1 : 0) + (utxoSetSummary.total_unspendable_amount ? 1 : 0))
-					+summaryItem("UTXO Count", "The total number of UTXOs, or Unspent Transaction Outputs, across the entire blockchain")
-						| #{utxoSetSummary.txouts.toLocaleString()}
+						+summaryItem("Block Hash", "The top block hash at the time this UTXO Set snapshot was produced")
+							a(href=`./block/${utxoSetSummary.bestblock}`) #{utils.ellipsizeMiddle(utxoSetSummary.bestblock, 12)}
+							+copyTextButton(utxoSetSummary.bestblock)
+					
+					hr.mt-3.mb-3
+					
+					+summaryRow(2 + (utxoSetSummary.transactions ? 1 : 0) + (utxoSetSummary.disk_size ? 1 : 0) + (utxoSetSummary.total_unspendable_amount ? 1 : 0))
+						+summaryItem("UTXO Count", "The total number of UTXOs, or Unspent Transaction Outputs, across the entire blockchain")
+							| #{utxoSetSummary.txouts.toLocaleString()}
 
-					+summaryItem("Coins", "The sum of all spendable BTC units across the entire blockchain")
-						span #{parseFloat(utxoSetSummary.total_amount).toLocaleString()}
-						+copyTextButton(utxoSetSummary.total_amount)
+						+summaryItem("Coins", "The sum of all spendable NMC units across the entire blockchain")
+							span #{parseFloat(utxoSetSummary.total_amount).toLocaleString()}
+							+copyTextButton(utxoSetSummary.total_amount)
 
-					if (utxoSetSummary.transactions)
-						+summaryItem("Total Transactions", "The total number of transactions that have unspent outputs")
-							| #{utxoSetSummary.transactions.toLocaleString()}
+						if (utxoSetSummary.transactions)
+							+summaryItem("Total Transactions", "The total number of transactions that have unspent outputs")
+								| #{utxoSetSummary.transactions.toLocaleString()}
 
-					if (utxoSetSummary.total_unspendable_amount)
-						+summaryItem("Unspendable Coins", "The total amount of coins permanently excluded from the UTXO Set (only available if coinstatsindex is used)")
-							span #{parseFloat(utxoSetSummary.total_unspendable_amount).toLocaleString()}
+						if (utxoSetSummary.total_unspendable_amount)
+							+summaryItem("Unspendable Coins", "The total amount of coins permanently excluded from the UTXO Set (only available if coinstatsindex is used)")
+								span #{parseFloat(utxoSetSummary.total_unspendable_amount).toLocaleString()}
 
-					if (utxoSetSummary.disk_size)
-						+summaryItem("Disk Size", "The estimated size of the UTXO Set on disk")
-							- var diskSize = utils.formatLargeNumber(utxoSetSummary.disk_size);
+						if (utxoSetSummary.disk_size)
+							+summaryItem("Disk Size", "The estimated size of the UTXO Set on disk")
+								- var diskSize = utils.formatLargeNumber(utxoSetSummary.disk_size);
 
-							| #{new Decimal(diskSize[0]).toDP(3)} #{diskSize[1].abbreviation}B
+								| #{new Decimal(diskSize[0]).toDP(3)} #{diskSize[1].abbreviation}B
 
-			if (utxoSetSummary.usingCoinStatsIndex)
-				span.small.text-muted Note: The above UTXO Set snapshot was produced using this node's <b>coin-stats index</b>; using this index affects which properties are available. Comparing the data above to a UTXO Set snapshot produced on a node without the coin-stats index enabled will look slightly different.
+					// Namecoin-only breakdown: the UTXO total split into the
+					// currency and the name halves, plus a count of how many names
+					// are actually registered on chain (separate from the locked NMC).
+					if (utxoSetSummary.total_coins_amount !== undefined || utxoSetSummary.total_names_amount !== undefined || namesSummary || namesSummaryPending)
+						hr.mt-3.mb-3
+						.mb-3
+							h6.text-card-highlight.fw-light.text-uppercase Namecoin breakdown
+							.text-muted.small Two distinct metrics are easy to confuse: the count of names on chain, and the NMC locked inside name outputs.
+						- var __nameCells = (utxoSetSummary.total_coins_amount !== undefined ? 1 : 0) + (utxoSetSummary.total_names_amount !== undefined ? 1 : 0) + ((namesSummary || namesSummaryPending) ? 1 : 0)
+						+summaryRow(Math.max(__nameCells, 1))
+							if (utxoSetSummary.total_coins_amount !== undefined)
+								+summaryItem("Coins (currency NMC)", "NMC sitting in plain currency outputs. This is the spendable money supply outside of name registrations — transferring this is a normal currency tx and does not touch the name database.")
+									span #{parseFloat(utxoSetSummary.total_coins_amount).toLocaleString()}
+									span.text-muted.small.ms-1 NMC
+							if (utxoSetSummary.total_names_amount !== undefined)
+								+summaryItem("NMC locked in names", "Sum of NMC sitting inside name outputs at the chain tip. Every registered name carries a small NMC balance (typically 0.01 NMC, but it has varied) that follows the name UTXO around until the name expires. This is NOT a count of names — it's the NMC value bound up in them.")
+									span #{parseFloat(utxoSetSummary.total_names_amount).toLocaleString()}
+									span.text-muted.small.ms-1 NMC
+							if (namesSummary)
+								+summaryItem("Registered names", "Count of unique names returned by Namecoin Core's `name_scan`. \"Active\" = unexpired (still resolvable). \"Total\" includes expired-but-not-yet-pruned entries that still live in the name database.")
+									span #{namesSummary.active.toLocaleString()}
+									span.text-muted.small.ms-1 active
+									div.small.text-muted.mt-1
+										span= namesSummary.total.toLocaleString()
+										span.ms-1 total
+										if (namesSummary.expired)
+											span.ms-1 (#{namesSummary.expired.toLocaleString()} expired)
+									if (namesSummary.truncated)
+										div.small.text-warning.mt-1 (truncated — hit per-prefix scan cap)
+							else if (namesSummaryPending)
+								+summaryItem("Registered names", "Count of unique names returned by Namecoin Core's name_scan.")
+									span.text-muted …
+									div.small.text-muted.mt-1 Computing in background
+						if (namesSummary && namesSummary.filterCounts)
+							.mt-3
+								div.text-muted.small.text-uppercase.mb-2
+									span Filter
+									span.ms-2.border-dotted(title="Counts of <em>active</em> names whose value carries each shape (valid JSON, .onion, TLSA records, IP addresses, Nostr identity, I2P address). Click any tile to see the matching names. Lists are sourced from the same 30-min background <code>name_scan</code> walk as the by-namespace breakdown above; per-filter lists are capped at 5,000 entries.", data-bs-toggle="tooltip", data-bs-html="true") (?)
+								.row.row-cols-2.row-cols-md-3.row-cols-lg-6.g-2
+									- var __filters = [{key:"json",label:"Valid JSON",icon:"bi-braces"},{key:"onion",label:".onion",icon:"bi-onion"},{key:"tls",label:"TLS",icon:"bi-shield-lock"},{key:"ip",label:"IP addresses",icon:"bi-hdd-network"},{key:"nostr",label:"Nostr",icon:"bi-broadcast-pin"},{key:"i2p",label:"I2P",icon:"bi-bezier2"}]
+									each __f in __filters
+										.col
+											a.text-decoration-none.d-block.h-100.p-3.rounded-2.border.border-card-highlight.text-body(href=`./names/filter/${__f.key}`)
+												div.small.text-muted= __f.label
+												div.h5.fw-light.mb-0.mt-1
+													- var __c = namesSummary.filterCounts[__f.key] || 0
+													span= __c.toLocaleString()
+												if (__c > 0 && namesSummary.active)
+													div.small.text-muted #{((__c / namesSummary.active) * 100).toFixed(1)}% of active
 
-			else
-				span.small.text-muted Note: This node does not have the <b>coin-stats index</b> enabled so this UTXO Set snapshot was built without it. Comparing the data above to a UTXO Set snapshot produced on a node WITH the coin-stats index enabled will look slightly different.
+						if (namesSummary && namesSummary.byNamespace && Object.keys(namesSummary.byNamespace).length)
+							.mt-3
+								div.text-muted.small.text-uppercase.mb-2 By namespace
+								.table-responsive
+									table.table.table-sm.table-borderless.mb-0.small
+										thead
+											tr
+												th.text-card-highlight.fw-light.text-uppercase NS
+												th.text-end.text-card-highlight.fw-light.text-uppercase Active
+												th.text-end.text-card-highlight.fw-light.text-uppercase Expired
+												th.text-end.text-card-highlight.fw-light.text-uppercase Total
+												th.d-none.d-md-table-cell.text-card-highlight.fw-light.text-uppercase Description
+										tbody
+											- var __nsKeys = Object.keys(namesSummary.byNamespace).sort((a,b) => namesSummary.byNamespace[b].active - namesSummary.byNamespace[a].active)
+											each __ns in __nsKeys
+												- var __row = namesSummary.byNamespace[__ns]
+												tr
+													td.font-monospace= __ns === "(none)" ? "—" : (__ns + "/")
+													td.text-end= __row.active.toLocaleString()
+													td.text-end.text-muted= __row.expired.toLocaleString()
+													td.text-end= __row.total.toLocaleString()
+													td.d-none.d-md-table-cell.text-muted.small= __ns === "(none)" ? "" : (nameApi && nameApi.namespaceLabel ? (nameApi.namespaceLabel(__ns) || "") : "")
+
+				if (utxoSetSummary.usingCoinStatsIndex)
+					span.small.text-muted Note: The above UTXO Set snapshot was produced using this node's <b>coin-stats index</b>; using this index affects which properties are available. Comparing the data above to a UTXO Set snapshot produced on a node without the coin-stats index enabled will look slightly different.
+
+				else
+					span.small.text-muted Note: This node does not have the <b>coin-stats index</b> enabled so this UTXO Set snapshot was built without it. Comparing the data above to a UTXO Set snapshot produced on a node WITH the coin-stats index enabled will look slightly different.
 
 
-		+pageTab("JSON", false)
-			+contentSection
-				pre
-					code.json #{JSON.stringify(utxoSetSummary, null, 4)}
+			+pageTab("JSON", false)
+				+contentSection
+					pre
+						code.json #{JSON.stringify(utxoSetSummary, null, 4)}
