@@ -1,4 +1,16 @@
-# BTC RPC Explorer
+# NMC RPC Explorer
+
+A Namecoin-flavoured fork of [btc-rpc-explorer](https://github.com/janoside/btc-rpc-explorer) with first-class support for `name_*` operations.
+
+When `BTCEXP_COIN=NMC` is set the explorer:
+
+- talks to your `namecoind` over RPC,
+- decodes `name_new`, `name_firstupdate` and `name_update` outputs (using namecoind's own `scriptPubKey.nameOp` field) and shows them on the transaction page,
+- exposes a `/name/<name>` view that pretty-prints the value (auto-detected JSON for `d/`/`id/` records),
+- ships a homepage "Recent Name Operations" tile,
+- adds a `/names` browser backed by `name_scan`.
+
+With `BTCEXP_COIN=BTC` the project still behaves identically to upstream `btc-rpc-explorer`.
 
 ## Self-Hosted Bitcoin explorer for everyone running [Bitcoin Core](https://github.com/bitcoin/bitcoin).
 
@@ -45,7 +57,7 @@ See [CHANGELOG.md](/CHANGELOG.md).
 
 1. Install `Bitcoin Core` - [instructions](https://bitcoin.org/en/full-node). Ensure that `Bitcoin Core`'s' RPC server is enabled (`server=1`).
 2. Allow `Bitcoin Core` to synchronize with the Bitcoin network (you *can* use this tool while sychronizing, but some pages may fail).
-3. Install Node.js (12.9+ required, 16+ recommended).
+3. Install Node.js (18+ required, 22+ recommended).
 
 ### Note about pruning and indexing configurations
 
