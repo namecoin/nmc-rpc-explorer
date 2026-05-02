@@ -1,18 +1,125 @@
-##### v3.?
-###### Unreleased
+##### nmc-3.6.4
+###### 2026-05-02
 
-* Minor fixes for running against Bitcoin Core v23
-* URL change: /mining-template -> /next-block (redirect is included for compatibility)
-* Homepage additions
+Surface name operations and the names they touch on `/next-block` and `/mempool-transactions`.
+
+Until now the only mempool/next-block surface that revealed name operations was `/mempool-name-ops`. The general transaction lists hid them — a `name_firstupdate` was indistinguishable from any other tx in `/mempool-transactions`, and operators couldn't see at a glance which names were about to land in the next block.
+
+* **`/next-block`** — the route now calls `name_pending` once and intersects by txid against the `getblocktemplate` candidate set. The view gains:
+  * a “N name op(s)” badge on the Summary card,
+  * a dedicated “Name operation(s)” content section above the transaction table, listing every (txid, op, name, decoded value) carried by the candidate block,
+  * a small `bi-tag-fill` icon next to the txid in the existing transaction table for any tx that carries a name op.
+  Cost: one extra `name_pending` RPC per `/next-block` render; the call is O(name-ops-in-mempool), not O(mempool size).
+
+* **`/mempool-transactions`** — the route runs the existing `nameApi.collectNameOps()` over the visible page of verbose mempool transactions (no extra RPC — the data is already on `vout[].scriptPubKey.nameOp`). The shared `+txList` mixin gains a `nameOpsByTxid` option that:
+  * shows an inline `name_*` badge + linked `d/...`/`id/...`/etc. name next to the txid,
+  * adds an expanded “Name operation(s)” panel underneath the IO details for any affected tx, with namespace tag, decoded JSON value (truncated, scrollable), and (for `name_new`) the pre-image hash.
+  An info banner at the top of the page summarises the count and links to `/mempool-name-ops` for the chain-wide view.
+
+* **New shared mixin file** — `views/includes/name-op-mixins.pug` defines `+nameOpBadge`, `+nameOpInlineBadges`, and `+nameOpRowCompact`, included from `shared-mixins.pug` so any page that extends `layout` can render name ops with consistent visual language. Future pages (block detail, address detail) can plug in by passing a `nameOpsByTxid` map.
+
+##### nmc-3.6.3
+###### 2026-05-02
+
+Fix `/utxo-set` (Namecoin Core response shape mismatch + page crash on missing data) and rebrand `/mempool-summary` fee-rate units from `sat/vB` to `swartz/vB`.
+
+* **`/utxo-set`** — root cause: Namecoin Core's `gettxoutsetinfo` returns the totals nested under `amount` (`{ coins, names, total }`) instead of Bitcoin Core's flat `total_amount` field, so `coreApi.getUtxoSetSummary` always saw an undefined `total_amount`, returned `null`, and the page crashed in `views/snippets/utxo-set.pug` with `Cannot read properties of null (reading 'lastUpdated')`.
+  * `app/api/coreApi.js`: when the response carries `amount` but no `total_amount`, surface `amount.total` as `total_amount` (and keep `amount.coins`/`amount.names` available as `total_coins_amount`/`total_names_amount` for views that want the breakdown).
+  * `views/snippets/utxo-set.pug`: when `utxoSetSummary` is null, render a friendly warning panel that explains the two common causes (no `coinstatsindex` + slow scans, or `BTCEXP_SLOW_DEVICE_MODE=true`) and the recommended fix, instead of crashing the page render.
+  * Add an optional Namecoin-only "Coins (currency) / Names (locked)" breakdown row beneath the standard summary when `coins`/`names` are available.
+  * Rename the BTC-flavoured copy on the Coins summary item to NMC.
+
+* **`/mempool-summary` units** — replace `sat/vB` with `swartz/vB` in all 8 callsites of `views/mempool-summary.pug` (column headers, summary items, custom-rate placeholder, fee-rate chart axis label). Other fee-rate views (`/next-block`, `/transaction`, `/block`, `/predicted-blocks`, `/block-analysis`, `/projected-blocks-old`, plus the index next-block snippet, `index-network-summary`, `blocks-list`, and `shared-mixins`) still say `sat/vB` — those are deliberately left alone in this PR; rename to follow.
+
+##### nmc-3.6.2
+###### 2026-05-02
+
+Fix abrasive white background on JSON/value `<pre>` blocks under the dark themes.
+
+* Bootstrap's `bg-body-tertiary` utility resolves to a near-white in our dark themes (`#f8f9fa`) which clashed with the rest of the page (`#112138` body, `#1a2433` cards) and reduced contrast against the near-white body text to nearly nothing — the value text was effectively invisible on `/mempool-name-ops`, `/name/...`, and `/tx/...`.
+* Re-target `pre.bg-body-tertiary` to a dark surface that matches `.card-highlight` (`lighten($card-bg, 5%)` background, `lighten($card-bg, 10%)` border, `$body-color` text) in `dark.scss` and `dark-v1.scss`. Light theme is intentionally untouched — the original `bg-body-tertiary` is fine there.
+* Bumps `package.json` to `3.6.2` (see `nmc-3.6.1` note: changed CSS asset must move the `?v=<cacheId>` URL).
+
+##### nmc-3.6.1
+###### 2026-05-02
+
+Force browser-tab favicon refresh.
+
+* Bump `package.json` version to `3.6.1` so the `?v=<cacheId>` query string baked into every static-asset URL (favicons, app CSS/JS, logos) changes. Browsers that cached the upstream Bitcoin-orange favicon under `?v=3.5.1` will now refetch the Namecoin coin glyph shipped in PR #21 (`feat(namecoin): replace Bitcoin-orange browser-tab favicons with Namecoin coin glyph`).
+* No code or asset changes — this is a cache-busting metadata bump only.
+
+##### nmc-3.6.0
+###### 2026-05-01
+
+Namecoin coin module: surface name operations and identity, and rebrand the chrome.
+
+* **Mempool / name ops**
+	* New `/mempool-name-ops` view: every name operation currently in the mempool, bucketed by `name_firstupdate` / `name_update` / `name_new`, backed by `name_pending` (O(name-ops), not O(mempool size)).
+	* `/name/<name>` now shows a *Pending in mempool* panel for unconfirmed updates queued against that specific name.
+	* Homepage *Recent Name Operations* tile folds in pending mempool ops alongside the recent-blocks scan, with a `pending` badge.
+	* New *Pending Names* nav link (NMC mode only).
+* **Detect and pretty-render `import` references** between names per [ifa-0001 §"import"](https://github.com/namecoin/proposals/blob/master/ifa-0001.md#import). Detection only — no recursive RPC fetch. All four spec-permitted shapes accepted (canonical `[[name, sel?]]` plus three short-hands), reported with the carrying node's path breadcrumb.
+* **Link `id/` records and `d/<name>` to NameID + Nostr identities**:
+	* Typed key/value rendering of NameID fields (`name`, `email`, `www`, `bitcoin`, `tor`, `pgp`/`gpg` fingerprint, etc.).
+	* Nostr block detected in both shapes (single-identity `nostr.pubkey` and multi-identity `nostr.names` / `nostr.relays`).
+	* Each hex pubkey encoded to NIP-19 `npub` (bech32) and linked to njump.me.
+	* Implied `<localPart>@<label>.bit` NIP-05 identifiers rendered for `d/<name>` records.
+* **Latest blocks**
+	* New merge-mining-aware *Miner* column for Namecoin: scans the parent (Bitcoin) coinbase tag carried inside the AuxPow blob (`auxpow.tx.vin[0].coinbase`), then falls back to the NMC coinbase tag, then to the payout address. The match signal (parent coinbase tag, parent payout address, NMC coinbase tag, or NMC payout address) is surfaced in each row's tooltip.
+	* Hover the *Miner* column header for an info bar explaining how merge-mining works and how this column is calculated.
+	* Native value labels honour the active coin: `NMC`/`sat` instead of `BTC`/`sat` (`global.currencyTypes.btc` is re-labelled at boot when `BTCEXP_COIN !== "BTC"`).
+* **Branding**
+	* Top-left logo / favicon / PWA icon / share-preview / safari-pinned-tab SVGs swapped from the Bitcoin “₿” glyph to a Namecoin “N” on Namecoin brand-blue (`#1a78d8`).
+	* New blue-heart *Donate to Namecoin* button on the homepage hero, sitting between the upstream red-heart *Donate* and *@BitcoinExplorer*.
+* **Tx-stats infographic**
+	* Hover any `min/pt`, `hr/pt`, or `day/pt` badge on `/tx-stats` for an explanation of what the unit means, how it's calculated (`(last block time − first) / (n_points − 1)`), and what to read into values relative to the 10-minute target.
+
+##### v3.5.1
+###### 2025-07-02
+
+* Minor cleanup
+* Fix self-identified version number
+
+
+##### v3.5.0
+###### 2025-06-23
+
+* Fix for node details page display on 28.0+
+* Tweak display of miner "notes" (disclaimer for Patoshi)
+* Fix for display of JSON-data content
+* New holidays and quotes
+* Updated miner IDs (including removal of 3 probably false positives from the "Patoshi" list)
+* Updated dependencies
+
+
+##### v3.4.0
+###### 2023-06-14
+
+* Breaking changes to the API (see [./api/changelog](/api/changelog))
+* Homepage
+	* New "Next Halving" widget in Network Summary
 	* Show difficulty ATH comparison
 	* Show "Next Block" fullness
+	* Progress bar for difficulty adjustment estimate
+	* Include median fee rate for next-block estimates (also on [/next-block](./next-block))
 	* Show a banner if 'today' is a Bitcoin 'Holiday' (see more below)
-* Tweaks to API, see [/api/changelog](./api/changelog)
+* Minor fixes for running against Bitcoin Core v23
+* Block Analysis: include top "days destroyed" transactions
+* URL change: /mining-template -> /next-block (redirect is included for compatibility)
+* On Extended PubKey pages, include balance data for various address (if Electrum server is configured)
+* New [/next-halving](./next-halving) tool
+* Several new API actions/changes; see [/api/changelog](./api/changelog)
 * New [/holidays](./holidays), a curated list of Bitcoin 'Holidays'
+* Support for different view options on [/fun](./fun)
+* On [/difficulty-history](./difficulty-history), make delta graph honor timespan filtering
+* Proper use of production-ready MemoryStore for session data
 * Support for serving static assets via a configurable CDN
 * Misc fixes for erroneous data display on non-mainnet nodes
 * Switch from fontawesome to bootstrap-icons v1.8.0
+* Refreshed miner-identification database
+* Refreshed "Dark" theme with blues toned down (legacy dark theme still available)
 * UI/UX tweaks
+* Misc minor fixes
 * Updated dependencies
 
 
