@@ -9,10 +9,79 @@ block headContent
 			word-wrap: break-word;       /* Internet Explorer 5.5+ */
 		}
 
+		/* Masonry-style packing for the RPC method section list on the
+		   index (no method selected). The default Bootstrap row makes
+		   every column in a logical row as tall as the tallest card, so
+		   short sections (Signer, Zmq) leave huge blank space next to
+		   Wallet. CSS multicolumn flows cards into the shortest available
+		   column instead, while keeping each card's width and internal
+		   size unchanged. Total page height collapses to roughly the
+		   tallest single section. */
+		.rpc-section-grid {
+			column-gap: 1rem;        /* matches Bootstrap g-3 horizontal gap */
+			column-count: 1;
+		}
+		@media (min-width: 768px) {
+			.rpc-section-grid { column-count: 2; }
+		}
+		@media (min-width: 992px) {
+			.rpc-section-grid { column-count: 3; }
+		}
+		.rpc-section-grid > .rpc-section-item {
+			break-inside: avoid;
+			-webkit-column-break-inside: avoid;
+			page-break-inside: avoid;
+			display: inline-block;   /* belt-and-braces for older WebKit */
+			width: 100%;
+			margin-bottom: 1rem;     /* matches Bootstrap g-3 vertical gap */
+		}
+
 block content
 	+pageTitle("RPC Browser")
 
-	if (gethelp)
+	//- The two-column layout (main panel + right sidebar with the section
+	//- list) only makes sense when a method is selected. On the index page
+	//- (no method selected), we instead show a full-width info alert at the
+	//- top, then drop the section lists into a 3-column grid below it so
+	//- they don't pile up in a narrow sidebar next to a small alert.
+	if (gethelp && !methodhelp)
+		+dismissableInfoAlert("rpcBrowserNoteDismissed", "About RPC Browser...")
+			.mb-2 This tool lists all RPC commands that your node makes publicly visible. Clicking on any command in the list will display additional information about that command and provide an interactive tool for submitting the command to your node.
+
+		if (session.favoriteRpcCommands && session.favoriteRpcCommands.length > 0)
+			.clearfix.mt-3
+				.float-start
+					i.bi-star.me-2
+				.float-start
+					+sectionTitle(`Favorites (${session.favoriteRpcCommands.length.toLocaleString()})`)
+			+contentSection
+				ol.mb-0.ps-4
+					each methodX, methodIndex in session.favoriteRpcCommands
+						li
+							a(href=`./rpc-browser?method=${methodX}`) #{methodX}
+
+		if (session.recentRpcCommands && session.recentRpcCommands.length > 0)
+			.clearfix.mt-3
+				.float-start
+					i.bi-clock-history.me-2
+				.float-start
+					+sectionTitle(`Recent (${session.recentRpcCommands.length.toLocaleString()})`)
+			+contentSection
+				ol.mb-0.ps-4
+					each methodX, methodIndex in session.recentRpcCommands
+						li
+							a(href=`./rpc-browser?method=${methodX}`) #{methodX}
+
+		.rpc-section-grid.mt-3
+			each section, sectionIndex in gethelp
+				.rpc-section-item
+					+contentSection(`${section.name} (${section.methods.length})`)
+						ol.mb-0.ps-4
+							each methodX, methodIndex in section.methods
+								li
+									a(href=`./rpc-browser?method=${methodX.name}`) #{methodX.name}
+
+	if (gethelp && methodhelp)
 		div.row
 			div.col-md-9
 				if (methodhelp)
@@ -110,7 +179,7 @@ block content
 
 						+pageTab("Help Content")
 							+contentSection("Help Content")
-								pre
+								pre(style="white-space: pre;")
 									code.json(data-lang="txt") #{methodhelp.string}
 
 						if (methodhelp.args && methodhelp.args.length > 0)
@@ -122,11 +191,6 @@ block content
 
 					
 							
-
-				else
-
-					+dismissableInfoAlert("rpcBrowserNoteDismissed", "About RPC Browser...")
-						.mb-2 This tool lists all RPC commands that your node makes publicly visible. Clicking on any command in the list will display additional information about that command and provide an interactive tool for submitting the command to your node.
 
 			.col-md-3
 				if (session.favoriteRpcCommands && session.favoriteRpcCommands.length > 0)
