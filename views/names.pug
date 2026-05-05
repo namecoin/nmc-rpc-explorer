@@ -1,0 +1,195 @@
+extends layout
+
+block headContent
+	title Namecoin names
+
+block content
+	+pageTitle("Names")
+
+	if (userMessageMarkdown)
+		.alert.alert-warning !{userMessageMarkdown}
+
+	+contentSection("How Namecoin names work")
+		p.
+			Namecoin names live in <strong>namespaces</strong>. The text before
+			the first <code>/</code> is the namespace; the text after is the
+			label. Namespaces are <em>convention</em> &mdash; consensus rules
+			do not enforce them, so anyone can register any prefix &mdash; but
+			the community has settled on a stable set:
+
+		ul.font-monospace.small.mb-3
+			li
+				code d/&lt;name&gt;
+				span.font-sans-serif.ms-2.text-muted
+					| .bit domain (the original Namecoin TLD). Example:
+					a.ms-1(href=`./name/${encodeURIComponent("d/testls")}`) d/testls
+					|  resolves
+					span.ms-1 testls.bit
+			li
+				code id/&lt;name&gt;
+				span.font-sans-serif.ms-2.text-muted NameID identity record (used by NIP-05, OpenID-style logins, PGP key publication).
+			li
+				code dd/&lt;name&gt;
+				span.font-sans-serif.ms-2.text-muted Domain sub-record / import target (referenced from a <code>d/</code> name's <code>import</code> field).
+
+		p.
+			<strong>Search</strong> any name from the search bar at the top of
+			the page &mdash; type <code>d/somename</code>, <code>id/alice</code>,
+			or any other <code>&lt;namespace&gt;/&lt;label&gt;</code> and you'll
+			be redirected to that name's detail page. The matcher only fires
+			when the query contains a forward slash, so a plain word like
+			<code>testls</code> still goes through the regular block / tx /
+			address search.
+
+		p.mb-0.
+			<strong>Lifecycle:</strong> a name is created with
+			<code>name_new</code> + <code>name_firstupdate</code>, then kept
+			alive with <code>name_update</code>. If no <code>name_update</code>
+			has confirmed within the last
+			<a href="https://github.com/namecoin/namecoin-core/blob/master/doc/namecoin.md" target="_blank" rel="noopener">36,000 blocks (~250 days)</a>
+			the name expires and anyone can re-register it.
+
+	+contentSection("Browse")
+		p.text-muted.small.mb-3.
+			This browser walks the chain via Namecoin Core's
+			<code>name_scan</code> RPC.  Names are returned in
+			<strong>lexicographic byte order</strong> starting at the value of the
+			&quot;Start at name&quot; field (inclusive) &mdash; not by registration
+			date, height, or value.  Scan starting at <code>d/</code> to step
+			through every <code>d/</code> name in alphabetical order, or paste a
+			specific name to resume from there.  Expired names are still listed
+			by <code>name_scan</code> and are flagged with the
+			<span class="badge bg-danger">Expired</span> badge below.
+
+		form.row.g-2.mb-3(method="get", action="./names")
+			.col-md-7
+				input.form-control.font-monospace(type="text", name="start", value=nameStart, placeholder="Start at name (e.g. d/, d/testls, id/alice)")
+			.col-md-2
+				input.form-control(type="number", name="count", min="1", max="200", value=nameCount, title="Number of names to return (max 200)")
+			.col-md-2
+				button.btn.btn-primary.w-100(type="submit") Scan
+
+		if (nameRows && nameRows.length)
+			.table-responsive
+				table.table.table-sm.mb-0
+					thead
+						tr
+							th Name
+							th NS
+							th Height
+							th Expires in
+							th Value (preview)
+					tbody
+						each row in nameRows
+							tr
+								td
+									a.font-monospace.small(href=`./name/${encodeURIComponent(row.name)}`)= row.name
+								td
+									if (row.namespace.namespace)
+										span.badge.bg-secondary= row.namespace.namespace
+								td
+									a(href=`./block-height/${row.height}`)= row.height
+								td
+									if (row.expired)
+										span.badge.bg-danger Expired
+									else
+										span= row.expires_in
+								td.text-truncate(style="max-width:30rem")
+									if (row.valueRender.kind === "json")
+										code.small= JSON.stringify(row.valueRender.parsed).slice(0, 120)
+									else
+										code.small= (row.valueRender.display || "").slice(0, 120)
+		else
+			div.text-muted No names returned for this scan window.
+
+	if (namesSummary && namesSummary.expiringSoon && namesSummary.expiringSoon.length)
+		+contentSection("About to expire")
+			p.text-muted.small.mb-3.
+				Active names whose <code>expires_in</code> is
+				&le; <strong>#{namesSummary.expiringSoonBlocks.toLocaleString()}</strong>
+				blocks (~#{Math.round(namesSummary.expiringSoonBlocks / 144)} days at
+				10 min/block).  Sorted by closest-to-expiring first.  If no
+				<code>name_update</code> confirms before <code>expires_in</code>
+				hits 0 the name lapses and anyone can re-register it.
+				Sourced from the background <code>name_scan</code> walk
+				(refreshed every 30 min); the per-name list is capped at
+				<strong>#{namesSummary.expiringListCap.toLocaleString()}</strong>
+				entries
+				if (namesSummary.expiringSoonTotal > namesSummary.expiringSoon.length)
+					|  &mdash; showing the first #{namesSummary.expiringSoon.length.toLocaleString()} of <strong>#{namesSummary.expiringSoonTotal.toLocaleString()}</strong>.
+				else
+					| .
+
+			.table-responsive
+				table.table.table-sm.mb-0
+					thead
+						tr
+							th Name
+							th NS
+							th Height
+							th Expires in
+					tbody
+						each row in namesSummary.expiringSoon
+							- var __slash = row.name ? row.name.indexOf("/") : -1
+							- var __ns = __slash > 0 ? row.name.substring(0, __slash) : null
+							tr
+								td
+									a.font-monospace.small(href=`./name/${encodeURIComponent(row.name)}`)= row.name
+								td
+									if (__ns)
+										span.badge.bg-secondary= __ns
+								td
+									if (row.height)
+										a(href=`./block-height/${row.height}`)= row.height
+								td
+									span.badge.bg-warning.text-dark= `${row.expires_in.toLocaleString()} blocks`
+
+	if (namesSummary && namesSummary.recentlyExpired && namesSummary.recentlyExpired.length)
+		+contentSection("Recently expired")
+			p.text-muted.small.mb-3.
+				Names that have expired within the last
+				<strong>#{namesSummary.recentlyExpiredBlocks.toLocaleString()}</strong>
+				blocks (~#{Math.round(namesSummary.recentlyExpiredBlocks / 144)} days at
+				10 min/block).  Sorted most-recently-expired first.  An expired
+				name can be re-registered by anyone via <code>name_new</code> +
+				<code>name_firstupdate</code>.  Sourced from the background
+				<code>name_scan</code> walk (refreshed every 30 min); the
+				per-name list is capped at
+				<strong>#{namesSummary.expiringListCap.toLocaleString()}</strong>
+				entries
+				if (namesSummary.recentlyExpiredTotal > namesSummary.recentlyExpired.length)
+					|  &mdash; showing the first #{namesSummary.recentlyExpired.length.toLocaleString()} of <strong>#{namesSummary.recentlyExpiredTotal.toLocaleString()}</strong>.
+				else
+					| .
+
+			.table-responsive
+				table.table.table-sm.mb-0
+					thead
+						tr
+							th Name
+							th NS
+							th Height
+							th Expired
+					tbody
+						each row in namesSummary.recentlyExpired
+							- var __slash = row.name ? row.name.indexOf("/") : -1
+							- var __ns = __slash > 0 ? row.name.substring(0, __slash) : null
+							tr
+								td
+									a.font-monospace.small(href=`./name/${encodeURIComponent(row.name)}`)= row.name
+								td
+									if (__ns)
+										span.badge.bg-secondary= __ns
+								td
+									if (row.height)
+										a(href=`./block-height/${row.height}`)= row.height
+								td
+									span.badge.bg-danger= `${Math.abs(row.expires_in).toLocaleString()} blocks ago`
+
+	else if (namesSummaryPending && !(namesSummary && namesSummary.expiringSoon && namesSummary.expiringSoon.length))
+		+contentSection("About to expire / Recently expired")
+			p.text-muted.small.mb-0.
+				The background <code>name_scan</code> walk hasn't finished yet &mdash;
+				the expiring / expired sections will appear here once the first
+				refresh completes (typically within ~30 seconds of explorer
+				boot).
