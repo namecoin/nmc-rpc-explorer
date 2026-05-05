@@ -1,7 +1,8 @@
 extends layout
 
 block headContent
-	title Bitcoin Explorer
+	- var titleCoinName = (coinConfig && coinConfig.name) ? coinConfig.name : "Bitcoin"
+	title #{titleCoinName} Explorer
 	
 block content
 
@@ -13,7 +14,8 @@ block content
 	- var tzMoment = moment.utc(new Date()).add(tzDiff, "hours");
 	- var tzDay = tzMoment.format("MM-DD");
 
-	if (global.btcHolidays.byDay[tzDay])
+	//- btcHolidays is upstream Bitcoin-specific commemorative content. Skip on non-BTC chains.
+	if (config.coin === "BTC" && global.btcHolidays.byDay[tzDay])
 		
 		- var day = tzDay;
 		- var dom = parseInt(day.substring(3));
@@ -34,43 +36,60 @@ block content
 	if (getblockchaininfo == null)
 		div.alert.alert-danger
 			h5.mb-3 Unable to get basic blockchain data
+			- var nodeBin = (config.coin === "NMC") ? "namecoind" : "bitcoind"
 			ul
 				li
 					p
 						b If you just started your node, it may still be initializing.
-						div At startup, bitcoind verifies its block index before making itself available to serve data. The amount of time the verification process takes depends largely on the speed of the machine bitcoind is running on. If you're running bitcoind on low powered, inexpensive hardware, don't be surprised if this process takes a long time.
+						div At startup, #{nodeBin} verifies its block index before making itself available to serve data. The amount of time the verification process takes depends largely on the speed of the machine #{nodeBin} is running on. If you're running #{nodeBin} on low powered, inexpensive hardware, don't be surprised if this process takes a long time.
 				li
 					p
-						b If you believe your bitcoind node is already initialized...
+						b If you believe your #{nodeBin} node is already initialized...
 						div Check your RPC connection info and/or check this application's error log for possible hints about the cause of this issue.
 	else
 
+		- var coinName = (coinConfig && coinConfig.name) ? coinConfig.name : "Bitcoin"
+		- var coinPeople = (config.coin === "NMC") ? "Namecoiners" : "Bitcoiners"
+
 		+dismissableAlert("homepageWelcomeBannerDismissed")
-			h5 Bitcoin Explorer
+			h5 #{coinName} Explorer
 				span.fw-light :
 					span.fst-italic.ms-1 The free, open-source, easy-to-setup, easy-to-use, self-hosted explorer
 			
 
-			span.fw-light Protect your privacy while enjoying the conveniences of public explorers. Made for Bitcoiners by Bitcoiners. Enjoy!
+			span.fw-light Protect your privacy while enjoying the conveniences of public explorers. Made for #{coinPeople} by #{coinPeople}. Enjoy!
 
 			hr
 
 			.mt-2
 				if (global.sourcecodeProjectMetadata)
-					a.btn.btn-sm.btn-primary.mb-2.mb-md-1.me-3(href="https://github.com/janoside/btc-rpc-explorer", title="View source code", data-bs-toggle="tooltip", data-bs-placement="bottom")
+					a.btn.btn-sm.btn-primary.mb-2.mb-md-1.me-3(href="https://github.com/namecoin/nmc-rpc-explorer", title="View nmc-rpc-explorer source code", data-bs-toggle="tooltip", data-bs-placement="bottom")
 						i.bi-git.fs-6.text-white.me-2
 						| View Source
 
-				a.btn.btn-sm.btn-primary.mb-2.mb-md-1.me-3(href="https://donate.bitcoinexplorer.org", target="_blank", title="Support this project with a donation", data-bs-toggle="tooltip", data-bs-placement="bottom")
+					a.btn.btn-sm.btn-primary.mb-2.mb-md-1.me-3(href="https://github.com/janoside/btc-rpc-explorer", title="View upstream btc-rpc-explorer source code", data-bs-toggle="tooltip", data-bs-placement="bottom")
+						i.bi-git.fs-6.text-white.me-2
+						| View Upstream Source
+
+				a.btn.btn-sm.btn-primary.mb-2.mb-md-1.me-3(href="https://donate.bitcoinexplorer.org", target="_blank", title="Support btc-rpc-explorer (the upstream project) with a donation", data-bs-toggle="tooltip", data-bs-placement="bottom")
 					i.bi-heart-fill.fs-6.text-danger.me-2
 					| Donate
-					
+
+				//- Namecoin donation button: same shape as the upstream Donate button
+				//- but with a blue heart, so it sits between Donate (red heart) and
+				//- @BitcoinExplorer without being mistaken for the upstream donation.
+				if (config.coin === "NMC")
+					a.btn.btn-sm.btn-primary.mb-2.mb-md-1.me-3(href="https://www.namecoin.org/donate/", target="_blank", title="Donate to Namecoin", data-bs-toggle="tooltip", data-bs-placement="bottom")
+						i.bi-heart-fill.fs-6.text-info.me-2
+						| Donate to Namecoin
+
 				a.btn.btn-sm.btn-primary.mb-2.mb-md-1.me-3(href="https://twitter.com/BitcoinExplorer", target="_blank", title="Follow @BitcoinExplorer on Twitter", data-bs-toggle="tooltip", data-bs-placement="bottom")
 					i.bi-twitter.fs-6.text-twitter.me-2
 					| @BitcoinExplorer
 
 		
-		if (global.activeBlockchain == "main")
+		//- Taproot history block is Bitcoin-specific; suppress on other chains.
+		if (config.coin === "BTC" && global.activeBlockchain == "main")
 			if (getblockchaininfo.softforks && getblockchaininfo.softforks.taproot && getblockchaininfo.softforks.taproot.bip9)
 				- var minTaprootHeight = getblockchaininfo.softforks.taproot.bip9.min_activation_height;
 				- var blocksLeft = minTaprootHeight - getblockchaininfo.blocks;
@@ -99,11 +118,17 @@ block content
 
 		
 		include includes/index-network-summary.pug
-		
-		
-		
-		
-						
+
+		if (config.coin === "NMC")
+			.d-flex.justify-content-between.mt-3
+				div
+					+sectionTitle("Recent Name Operations")
+				div
+					a.small.ms-2(href="./mempool-name-ops") Mempool name ops &raquo;
+					a.small.ms-3(href="./names") Browse names &raquo;
+			+contentSection
+				div#index-recent-name-ops
+					div.text-muted.small Loading recent name ops…
 
 
 		if (latestBlocks)
@@ -127,10 +152,95 @@ block content
 
 block endOfBody
 	script.
+		var audio = new Audio('./audio/609335__kenneth_cooney__levelup.wav');
+		var tipInfo = null;
+
+		function refreshHalvingCountdownUI() {
+			$.get("./snippet/index-halving-countdown", function(data) {
+				$("#index-halving-countdown").html(data);
+				enableTooltipsAndPopovers();
+			});
+		}
+
+		function checkHalvingCountdown() {
+			$.get("./api/blocks/tip", function(data) {
+				if (data.height > tipInfo.height) {
+					tipInfo = data;
+
+					audio.play();
+
+					refreshHalvingCountdownUI();
+				}
+
+				console.log(tipInfo);
+			});
+		}
+
+		function escapeHtml(s) {
+			return String(s).replace(/[<>&]/g, function(c){return {"<":"&lt;",">":"&gt;","&":"&amp;"}[c];});
+		}
+
+		function renderNameOpRow(op, opts) {
+			var badgeColor = (op.op === "name_firstupdate") ? "bg-success"
+				: (op.op === "name_update") ? "bg-primary"
+				: (op.op === "name_new") ? "bg-secondary" : "bg-dark";
+			var pendingMark = opts && opts.pending
+				? '<span class="badge bg-warning text-dark ms-1" title="In mempool, not yet confirmed">pending</span>'
+				: '';
+			var nameCell = op.name
+				? '<a class="font-monospace small" href="./name/' + encodeURIComponent(op.name) + '">' + escapeHtml(op.name) + '</a>'
+				: '<span class="text-muted small">(name_new commitment)</span>';
+			var valuePreview = op.valuePreview
+				? '<code class="small">' + escapeHtml(op.valuePreview) + '</code>'
+				: '';
+			return '<tr>'
+				+ '<td><span class="badge ' + badgeColor + '">' + op.op + '</span>' + pendingMark + '</td>'
+				+ '<td>' + nameCell + '</td>'
+				+ '<td class="text-truncate" style="max-width:24rem">' + valuePreview + '</td>'
+				+ '<td><a class="font-monospace small" href="./tx/' + op.txid + '">' + op.txid.slice(0, 12) + '…</a></td>'
+				+ '</tr>';
+		}
+
+		function renderRecentNameOps(payload) {
+			var el = document.getElementById("index-recent-name-ops");
+			if (!el) return;
+			var haveOps = payload && payload.ops && payload.ops.length;
+			var havePending = payload && payload.pending && payload.pending.length;
+			if (!haveOps && !havePending) {
+				el.innerHTML = '<div class="text-muted small">No name operations in the mempool or the last ' + (payload && payload.window || 6) + ' blocks.</div>';
+				return;
+			}
+			var rows = (payload.pending || []).map(function(op) { return renderNameOpRow(op, {pending: true}); })
+				.concat((payload.ops || []).map(function(op) { return renderNameOpRow(op); }))
+				.join("");
+			var caption = '';
+			if (havePending) {
+				caption = '<div class="text-muted small mb-2">' + payload.pending.length + ' pending in mempool, ' + (haveOps ? payload.ops.length : 0) + ' confirmed in last ' + payload.window + ' blocks.</div>';
+			}
+			el.innerHTML = caption + '<div class="table-responsive"><table class="table table-sm mb-0"><thead><tr><th>Op</th><th>Name</th><th>Value</th><th>Tx</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+		}
+
 		$(document).ready(function() {
 			$.get("./snippet/next-block", function(data) {
 				$("#index-next-block").html(data);
 				enableTooltipsAndPopovers();
 			});
+
+			if (document.getElementById("index-recent-name-ops")) {
+				$.getJSON("./snippet/recent-name-ops", renderRecentNameOps).fail(function() {
+					var el = document.getElementById("index-recent-name-ops");
+					if (el) el.innerHTML = '<div class="text-muted small">Failed to load recent name operations.</div>';
+				});
+			}
+
+			$.get("./api/blocks/tip", function(data) {
+				tipInfo = data;
+			});
+
+			if ($("#index-halving-countdown-wrapper").length) {
+				refreshHalvingCountdownUI();
+
+				setInterval(checkHalvingCountdown, 3000);
+			}
 		});
 		
