@@ -1,0 +1,413 @@
+extends layout
+
+block headContent
+	title Namecoin names
+
+block content
+	+pageTitle("Names")
+
+	if (userMessageMarkdown)
+		.alert.alert-warning !{userMessageMarkdown}
+
+	+contentSection("How Namecoin names work")
+		p.
+			Namecoin names live in <strong>namespaces</strong>. The text before
+			the first <code>/</code> is the namespace; the text after is the
+			label. Namespaces are <em>convention</em> &mdash; consensus rules
+			do not enforce them, so anyone can register any prefix &mdash; but
+			the community has settled on a stable set:
+
+		ul.font-monospace.small.mb-3
+			li
+				code d/&lt;name&gt;
+				span.font-sans-serif.ms-2.text-muted
+					| .bit domain (the original Namecoin TLD). Example:
+					a.ms-1(href=utils.nameUrl("d/testls")) d/testls
+					|  resolves
+					span.ms-1 testls.bit
+			li
+				code id/&lt;name&gt;
+				span.font-sans-serif.ms-2.text-muted NameID identity record (used by NIP-05, OpenID-style logins, PGP key publication).
+			li
+				code dd/&lt;name&gt;
+				span.font-sans-serif.ms-2.text-muted Domain sub-record / import target (referenced from a <code>d/</code> name's <code>import</code> field).
+
+		p.
+			<strong>Search</strong> any name from the search bar at the top of
+			the page &mdash; type <code>d/somename</code>, <code>id/alice</code>,
+			or any other <code>&lt;namespace&gt;/&lt;label&gt;</code> and you'll
+			be redirected to that name's detail page. The matcher only fires
+			when the query contains a forward slash, so a plain word like
+			<code>testls</code> still goes through the regular block / tx /
+			address search.
+
+		p.mb-0.
+			<strong>Lifecycle:</strong> a name is created with
+			<code>name_new</code> + <code>name_firstupdate</code>, then kept
+			alive with <code>name_update</code>. If no <code>name_update</code>
+			has confirmed within the last
+			<a href="https://github.com/namecoin/namecoin-core/blob/master/doc/namecoin.md" target="_blank" rel="noopener">36,000 blocks (~250 days)</a>
+			the name expires and anyone can re-register it.
+
+	+contentSection("Browse")
+		p.text-muted.small.mb-3.
+			This browser walks the chain via Namecoin Core's
+			<code>name_scan</code> RPC.  Names are returned in
+			<strong>lexicographic byte order</strong> starting at the value of the
+			&quot;Start at name&quot; field (inclusive) &mdash; not by registration
+			date, height, or value.  Scan starting at <code>d/</code> to step
+			through every <code>d/</code> name in alphabetical order, or paste a
+			specific name to resume from there.  Expired names are still listed
+			by <code>name_scan</code> and are flagged with the
+			<span class="badge bg-danger">Expired</span> badge below.
+
+		form.row.g-2.mb-3(method="get", action="./names")
+			.col-md-7
+				input.form-control.font-monospace(type="text", name="start", value=nameStart, placeholder="Start at name (e.g. d/, d/testls, id/alice)")
+			.col-md-2
+				input.form-control(type="number", name="count", min="1", max="200", value=nameCount, title="Number of names to return (max 200)")
+			.col-md-2
+				button.btn.btn-primary.w-100(type="submit") Scan
+
+		if (nameRows && nameRows.length)
+			.table-responsive
+				table.table.table-sm.mb-0
+					thead
+						tr
+							th Name
+							th NS
+							th Height
+							th Expires in
+							th Value (preview)
+					tbody
+						each row in nameRows
+							tr
+								td
+									a.font-monospace.small(href=utils.nameUrl(row.name))= row.name
+								td
+									if (row.namespace.namespace)
+										span.badge.bg-secondary= row.namespace.namespace
+								td
+									a(href=`./block-height/${row.height}`)= row.height
+								td
+									if (row.expired)
+										span.badge.bg-danger Expired
+									else
+										span= row.expires_in
+								td.text-truncate(style="max-width:30rem")
+									if (row.valueRender.kind === "json")
+										code.small= JSON.stringify(row.valueRender.parsed).slice(0, 120)
+									else
+										code.small= (row.valueRender.display || "").slice(0, 120)
+
+			//- Quick-expand links: the form above already lets users type any
+			//- count up to 200, but most landings just want one click to
+			//- widen the window without retyping the start cursor.
+			- var __startQ = nameStart ? `&start=${encodeURIComponent(nameStart)}` : ""
+			.mt-2.small.text-muted
+				| Showing #{nameRows.length} #{nameCount && nameCount !== nameRows.length ? `(of up to ${nameCount} requested)` : ""}.  Show
+				a.ms-1(href=`./names?count=10${__startQ}`) 10
+				| ,
+				a.ms-1(href=`./names?count=50${__startQ}`) 50
+				| ,
+				a.ms-1(href=`./names?count=200${__startQ}`) 200
+				| .
+		else
+			div.text-muted No names returned for this scan window.
+
+	- var __previewCount = 10
+
+	- var __expiringSoonRows = expiringSoonDecorated || (namesSummary && namesSummary.expiringSoon) || []
+	- var __recentlyExpiredRows = recentlyExpiredDecorated || (namesSummary && namesSummary.recentlyExpired) || []
+
+	if (namesSummary && namesSummary.expiringSoon && namesSummary.expiringSoon.length)
+		+contentSection("About to expire")
+			p.text-muted.small.mb-3.
+				Active names whose <code>expires_in</code> is
+				&le; <strong>#{namesSummary.expiringSoonBlocks.toLocaleString()}</strong>
+				blocks (~#{Math.round(namesSummary.expiringSoonBlocks / 144)} days at
+				10 min/block).  Sorted by closest-to-expiring first.  If no
+				<code>name_update</code> confirms before <code>expires_in</code>
+				hits 0 the name lapses and anyone can re-register it.
+				Sourced from the background <code>name_scan</code> walk
+				(refreshed every 30 min); the per-name list is capped at
+				<strong>#{namesSummary.expiringListCap.toLocaleString()}</strong>
+				entries
+				if (namesSummary.expiringSoonTotal > namesSummary.expiringSoon.length)
+					|  &mdash; <strong>#{namesSummary.expiringSoonTotal.toLocaleString()}</strong> in total, listing first #{namesSummary.expiringSoon.length.toLocaleString()}.
+				else
+					| .
+
+			- var __preview = __expiringSoonRows.slice(0, __previewCount)
+			- var __rest = __expiringSoonRows.length > __previewCount ? __expiringSoonRows.slice(__previewCount) : []
+
+			.table-responsive
+				table.table.table-sm.mb-0
+					thead
+						tr
+							th Name
+							th NS
+							th Height
+							th Expires in
+							th Value (preview)
+					tbody
+						each row in __preview
+							- var __slash = row.name ? row.name.indexOf("/") : -1
+							- var __ns = __slash > 0 ? row.name.substring(0, __slash) : null
+							tr
+								td
+									a.font-monospace.small(href=utils.nameUrl(row.name))= row.name
+								td
+									if (__ns)
+										span.badge.bg-secondary= __ns
+								td
+									if (row.height)
+										a(href=`./block-height/${row.height}`)= row.height
+								td
+									span.badge.bg-warning.text-dark= `${row.expires_in.toLocaleString()} blocks`
+								td.text-truncate(style="max-width:30rem")
+									if (row.valueRender && row.valueRender.kind === "json")
+										code.small= JSON.stringify(row.valueRender.parsed).slice(0, 120)
+									else if (row.valueRender)
+										code.small= (row.valueRender.display || "").slice(0, 120)
+
+			if (__rest.length)
+				details.mt-2
+					summary.small.text-muted(style="cursor:pointer")
+						| Show remaining #{__rest.length.toLocaleString()} (#{__expiringSoonRows.length.toLocaleString()} loaded total)
+					.table-responsive.mt-2
+						table.table.table-sm.mb-0
+							thead
+								tr
+									th Name
+									th NS
+									th Height
+									th Expires in
+									th Value (preview)
+							tbody
+								each row in __rest
+									- var __slash = row.name ? row.name.indexOf("/") : -1
+									- var __ns = __slash > 0 ? row.name.substring(0, __slash) : null
+									tr
+										td
+											a.font-monospace.small(href=utils.nameUrl(row.name))= row.name
+										td
+											if (__ns)
+												span.badge.bg-secondary= __ns
+										td
+											if (row.height)
+												a(href=`./block-height/${row.height}`)= row.height
+										td
+											span.badge.bg-warning.text-dark= `${row.expires_in.toLocaleString()} blocks`
+										td.text-truncate(style="max-width:30rem")
+											if (row.valueRender && row.valueRender.kind === "json")
+												code.small= JSON.stringify(row.valueRender.parsed).slice(0, 120)
+											else if (row.valueRender)
+												code.small= (row.valueRender.display || "").slice(0, 120)
+
+	if (namesSummary && namesSummary.recentlyExpired && namesSummary.recentlyExpired.length)
+		+contentSection("Recently expired")
+			p.text-muted.small.mb-3.
+				Names that have expired within the last
+				<strong>#{namesSummary.recentlyExpiredBlocks.toLocaleString()}</strong>
+				blocks (~#{Math.round(namesSummary.recentlyExpiredBlocks / 144)} days at
+				10 min/block).  Sorted most-recently-expired first.  An expired
+				name can be re-registered by anyone via <code>name_new</code> +
+				<code>name_firstupdate</code>.  Sourced from the background
+				<code>name_scan</code> walk (refreshed every 30 min); the
+				per-name list is capped at
+				<strong>#{namesSummary.expiringListCap.toLocaleString()}</strong>
+				entries
+				if (namesSummary.recentlyExpiredTotal > namesSummary.recentlyExpired.length)
+					|  &mdash; <strong>#{namesSummary.recentlyExpiredTotal.toLocaleString()}</strong> in total, listing first #{namesSummary.recentlyExpired.length.toLocaleString()}.
+				else
+					| .
+
+			- var __previewE = __recentlyExpiredRows.slice(0, __previewCount)
+			- var __restE = __recentlyExpiredRows.length > __previewCount ? __recentlyExpiredRows.slice(__previewCount) : []
+
+			.table-responsive
+				table.table.table-sm.mb-0
+					thead
+						tr
+							th Name
+							th NS
+							th Height
+							th Expired
+							th Value (preview)
+					tbody
+						each row in __previewE
+							- var __slash = row.name ? row.name.indexOf("/") : -1
+							- var __ns = __slash > 0 ? row.name.substring(0, __slash) : null
+							tr
+								td
+									a.font-monospace.small(href=utils.nameUrl(row.name))= row.name
+								td
+									if (__ns)
+										span.badge.bg-secondary= __ns
+								td
+									if (row.height)
+										a(href=`./block-height/${row.height}`)= row.height
+								td
+									span.badge.bg-danger= `${Math.abs(row.expires_in).toLocaleString()} blocks ago`
+								td.text-truncate(style="max-width:30rem")
+									if (row.valueRender && row.valueRender.kind === "json")
+										code.small= JSON.stringify(row.valueRender.parsed).slice(0, 120)
+									else if (row.valueRender)
+										code.small= (row.valueRender.display || "").slice(0, 120)
+
+			if (__restE.length)
+				details.mt-2
+					summary.small.text-muted(style="cursor:pointer")
+						| Show remaining #{__restE.length.toLocaleString()} (#{__recentlyExpiredRows.length.toLocaleString()} loaded total)
+					.table-responsive.mt-2
+						table.table.table-sm.mb-0
+							thead
+								tr
+									th Name
+									th NS
+									th Height
+									th Expired
+									th Value (preview)
+							tbody
+								each row in __restE
+									- var __slash = row.name ? row.name.indexOf("/") : -1
+									- var __ns = __slash > 0 ? row.name.substring(0, __slash) : null
+									tr
+										td
+											a.font-monospace.small(href=utils.nameUrl(row.name))= row.name
+										td
+											if (__ns)
+												span.badge.bg-secondary= __ns
+										td
+											if (row.height)
+												a(href=`./block-height/${row.height}`)= row.height
+										td
+											span.badge.bg-danger= `${Math.abs(row.expires_in).toLocaleString()} blocks ago`
+										td.text-truncate(style="max-width:30rem")
+											if (row.valueRender && row.valueRender.kind === "json")
+												code.small= JSON.stringify(row.valueRender.parsed).slice(0, 120)
+											else if (row.valueRender)
+												code.small= (row.valueRender.display || "").slice(0, 120)
+
+	else if (namesSummaryPending && !(namesSummary && namesSummary.expiringSoon && namesSummary.expiringSoon.length))
+		+contentSection("About to expire / Recently expired")
+			p.text-muted.small.mb-0.
+				The background <code>name_scan</code> walk hasn't finished yet &mdash;
+				the expiring / expired sections will appear here once the first
+				refresh completes (typically within ~30 seconds of explorer
+				boot).
+
+	//- New Names: every `name_firstupdate` op confirmed in the last
+	//- ~2,016 blocks (~2 weeks). firstupdates are the only Namecoin op that
+	//- creates a brand-new on-chain name (a `name_new` only pre-commits a
+	//- salted hash; nothing on the chain references the human-readable name
+	//- until the firstupdate confirms ~12 blocks later), so this list is the
+	//- canonical answer to "which names were registered recently". Same
+	//- 2,016-block window as the expiring / expired sections above so the
+	//- three feed off a shared mental model.
+	- var __recentFU = recentFirstUpdatesDecorated || (recentFirstUpdates && recentFirstUpdates.items) || []
+	if (recentFirstUpdates && __recentFU.length)
+		+contentSection("New Names")
+			p.text-muted.small.mb-3.
+				Names registered (via <code>name_firstupdate</code>) within the last
+				<strong>#{recentFirstUpdates.windowBlocks.toLocaleString()}</strong>
+				blocks (~#{Math.round(recentFirstUpdates.windowBlocks / 144)} days at
+				10 min/block).  Sorted newest-block first.  Sourced from the
+				background block walk (refreshed every 30 min) over heights
+				<a href=`./block-height/${recentFirstUpdates.fromHeight}`>#{recentFirstUpdates.fromHeight.toLocaleString()}</a>
+				&ndash;
+				<a href=`./block-height/${recentFirstUpdates.toHeight}`>#{recentFirstUpdates.toHeight.toLocaleString()}</a>; the
+				per-name list is capped at
+				<strong>#{__recentFU.length.toLocaleString()}</strong>
+				entries
+				if (recentFirstUpdates.total > __recentFU.length)
+					|  &mdash; <strong>#{recentFirstUpdates.total.toLocaleString()}</strong> in total, listing first #{__recentFU.length.toLocaleString()}.
+				else
+					| .
+
+			- var __previewN = __recentFU.slice(0, __previewCount)
+			- var __restN = __recentFU.length > __previewCount ? __recentFU.slice(__previewCount) : []
+
+			.table-responsive
+				table.table.table-sm.mb-0
+					thead
+						tr
+							th Name
+							th NS
+							th Height
+							th Registered
+							th Value (preview)
+					tbody
+						each row in __previewN
+							- var __ns = row.namespace || null
+							- var __blocksAgo = recentFirstUpdates.toHeight - row.height
+							tr
+								td
+									if (row.name)
+										a.font-monospace.small(href=utils.nameUrl(row.name))= row.name
+								td
+									if (__ns)
+										span.badge.bg-secondary= __ns
+								td
+									if (row.height)
+										a(href=`./block-height/${row.height}`)= row.height
+								td
+									span.badge.bg-success= `${__blocksAgo.toLocaleString()} blocks ago`
+								td.text-truncate(style="max-width:30rem")
+									if (row.valueRender && row.valueRender.kind === "json")
+										code.small= JSON.stringify(row.valueRender.parsed).slice(0, 120)
+									else if (row.valueRender)
+										code.small= (row.valueRender.display || "").slice(0, 120)
+
+			if (__restN.length)
+				details.mt-2
+					summary.small.text-muted(style="cursor:pointer")
+						| Show remaining #{__restN.length.toLocaleString()} (#{__recentFU.length.toLocaleString()} loaded total)
+					.table-responsive.mt-2
+						table.table.table-sm.mb-0
+							thead
+								tr
+									th Name
+									th NS
+									th Height
+									th Registered
+									th Value (preview)
+							tbody
+								each row in __restN
+									- var __ns = row.namespace || null
+									- var __blocksAgo = recentFirstUpdates.toHeight - row.height
+									tr
+										td
+											if (row.name)
+												a.font-monospace.small(href=utils.nameUrl(row.name))= row.name
+										td
+											if (__ns)
+												span.badge.bg-secondary= __ns
+										td
+											if (row.height)
+												a(href=`./block-height/${row.height}`)= row.height
+										td
+											span.badge.bg-success= `${__blocksAgo.toLocaleString()} blocks ago`
+										td.text-truncate(style="max-width:30rem")
+											if (row.valueRender && row.valueRender.kind === "json")
+												code.small= JSON.stringify(row.valueRender.parsed).slice(0, 120)
+											else if (row.valueRender)
+												code.small= (row.valueRender.display || "").slice(0, 120)
+	else if (recentFirstUpdates && recentFirstUpdates.total === 0)
+		+contentSection("New Names")
+			p.text-muted.small.mb-0.
+				No <code>name_firstupdate</code> ops confirmed in the last
+				<strong>#{recentFirstUpdates.windowBlocks.toLocaleString()}</strong>
+				blocks (heights
+				<a href=`./block-height/${recentFirstUpdates.fromHeight}`>#{recentFirstUpdates.fromHeight.toLocaleString()}</a>
+				&ndash;
+				<a href=`./block-height/${recentFirstUpdates.toHeight}`>#{recentFirstUpdates.toHeight.toLocaleString()}</a>).
+				New registrations are rare on the current chain &mdash; this list
+				will populate as soon as a fresh <code>name_firstupdate</code> confirms.
+	else if (recentFirstUpdatesPending)
+		+contentSection("New Names")
+			p.text-muted.small.mb-0.
+				The background block walk for new <code>name_firstupdate</code>
+				ops hasn't finished yet &mdash; this section will appear here once
+				the first refresh completes.

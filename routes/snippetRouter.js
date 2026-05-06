@@ -4,7 +4,6 @@ const debug = require("debug");
 const debugLog = debug("btcexp:router");
 
 const express = require('express');
-const csurf = require('csurf');
 const router = express.Router();
 const util = require('util');
 const moment = require('moment');
@@ -21,8 +20,7 @@ const config = require("./../app/config.js");
 const coreApi = require("./../app/api/coreApi.js");
 const addressApi = require("./../app/api/addressApi.js");
 const btcQuotes = require("./../app/coins/btcQuotes.js");
-
-const forceCsrf = csurf({ ignoreMethods: [] });
+const nmcQuotes = require("./../app/coins/nmcQuotes.js");
 
 
 
@@ -37,8 +35,27 @@ router.get("/formatCurrencyAmount/:amt", function(req, res, next) {
 });
 
 router.get("/quote/random", function(req, res, next) {
-	res.locals.quoteIndex = utils.randomInt(0, btcQuotes.items.length);
-	res.locals.quote = btcQuotes.items[res.locals.quoteIndex];
+	let done = false;
+
+	while (!done) {
+		res.locals.quoteIndex = utils.randomInt(0, btcQuotes.items.length);
+		res.locals.quote = btcQuotes.items[res.locals.quoteIndex];
+
+		done = !utils.objHasProperty(res.locals.quote, "duplicateIndex");
+	}
+
+	res.render("snippets/quote");
+
+	next();
+});
+
+// Namecoin quote/fact of the page-load. Companion to /snippet/quote/random;
+// rendered as a second iframe above the upstream Bitcoin quote so that an
+// instance running on Namecoin (BTCEXP_COIN=NMC) shows a Namecoin quote and
+// the Bitcoin quote it's paired with.
+router.get("/quote/random/nmc", function(req, res, next) {
+	res.locals.quoteIndex = -1; // suppress "open this quote" link; nmcQuotes has no /quote/N route
+	res.locals.quote = nmcQuotes.items[utils.randomInt(0, nmcQuotes.items.length)];
 
 	res.render("snippets/quote");
 
@@ -62,6 +79,7 @@ router.get("/next-block", asyncHandler(async (req, res, next) => {
 
 		result.minFeeRate = nextBlockEstimate.minFeeRate;
 		result.maxFeeRate = nextBlockEstimate.maxFeeRate;
+		result.medianFeeRate = nextBlockEstimate.medianFeeRate;
 		result.minFeeTxid = nextBlockEstimate.minFeeTxid;
 		result.maxFeeTxid = nextBlockEstimate.maxFeeTxid;
 
@@ -72,11 +90,65 @@ router.get("/next-block", asyncHandler(async (req, res, next) => {
 
 	res.locals.minFeeRate = result.minFeeRate;
 	res.locals.maxFeeRate = result.maxFeeRate;
+	res.locals.medianFeeRate = result.medianFeeRate;
 	res.locals.txCount = result.txCount;
 	res.locals.totalWeight = result.totalWeight;
 	res.locals.totalFees = result.totalFees;
 
 	res.render("snippets/index-next-block");
+}));
+
+router.get("/index-halving-countdown", asyncHandler(async (req, res, next) => {
+	try {
+		const getblockchaininfo = await utils.timePromise("snippet.index-halving-countdown.getBlockchainInfo", async () => {
+			return await coreApi.getBlockchainInfo();
+		});
+
+		let promises = [];
+
+		res.locals.getblockchaininfo = getblockchaininfo;
+		res.locals.difficultyPeriod = parseInt(Math.floor(getblockchaininfo.blocks / coinConfig.difficultyAdjustmentBlockCount));
+
+		let blockHeights = [];
+		if (getblockchaininfo.blocks) {
+			for (let i = 0; i < 1; i++) {
+				blockHeights.push(getblockchaininfo.blocks - i);
+			}
+		} else if (global.activeBlockchain == "regtest") {
+			// hack: default regtest node returns getblockchaininfo.blocks=0, despite
+			// having a genesis block; hack this to display the genesis block
+			blockHeights.push(0);
+		}
+
+		promises.push(utils.timePromise("snippet.index-halving-countdown.getBlockHeaderByHeight", async () => {
+			let h = coinConfig.difficultyAdjustmentBlockCount * res.locals.difficultyPeriod;
+			res.locals.difficultyPeriodFirstBlockHeader = await coreApi.getBlockHeaderByHeight(h);
+		}));
+
+		promises.push(utils.timePromise("snippet.index-halving-countdown.getBlocksByHeight", async () => {
+			const latestBlocks = await coreApi.getBlocksByHeight(blockHeights);
+			
+			res.locals.latestBlocks = latestBlocks;
+		}));
+
+		await utils.awaitPromises(promises);
+
+
+		let nextHalvingData = utils.nextHalvingEstimates(res.locals.difficultyPeriodFirstBlockHeader, res.locals.latestBlocks[0]);
+
+		res.locals.nextHalvingData = nextHalvingData;
+
+		await utils.timePromise("snippet.index-halving-countdown.render", async () => {
+			res.render("snippets/index-halving-countdown");
+		});
+
+	} catch (e) {
+		res.locals.pageErrors.push(utils.logError("390wrgehburfuge", e));
+
+		await utils.timePromise("snippet.index-halving-countdown.render", async () => {
+			res.render("snippets/index-halving-countdown");
+		});
+	}
 }));
 
 router.get("/utxo-set", asyncHandler(async (req, res, next) => {
@@ -92,6 +164,12 @@ router.get("/utxo-set", asyncHandler(async (req, res, next) => {
 	}));
 
 	await utils.awaitPromises(promises);
+
+	// Namecoin: surface the cached registered-names summary alongside
+	// the UTXO totals so the page can show count-of-names next to NMC-locked.
+	res.locals.namesSummary = global.namesSummary;
+	res.locals.namesSummaryPending = global.namesSummaryPending;
+	res.locals.nameApi = require("./../app/api/nameApi.js");
 
 	res.render("snippets/utxo-set");
 }));
