@@ -4,7 +4,7 @@ module.exports = {
 		{
 			name: "Bitcoin Pizza Day",
 			date: "2010-05-22",
-			desc: "On this day in 2010, Lazlo Hanyecz, paid Jeremy Sturdivant 10,000 BTC for two pizzas costing ~41 USD. The famous <a href='./tx/a1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d@57043'>\"Bitcoin Pizza\" transaction</a> was one of the earliest real-world BTC transactions and is celebrated as helping start the Bitcoin economy."
+			desc: "On this day in 2010, Laszlo Hanyecz, paid Jeremy Sturdivant 10,000 BTC for two pizzas costing ~41 USD. The famous <a href='./tx/a1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d@57043'>\"Bitcoin Pizza\" transaction</a> was one of the earliest real-world BTC transactions and is celebrated as helping start the Bitcoin economy."
 		},
 		{
 			name: "SegWit Lock-In Day",
@@ -37,6 +37,11 @@ module.exports = {
 			desc: "On this day in 2013, Ross Ulbricht was captured and imprisoned for his role in creating The Silk Road website. He was given two life sentences for non-violent crimes. Fighting for Ross's freedom is a cause supported by many Bitcoiners."
 		},
 		{
+			name: "Ross Pardon Day",
+			date: "2025-01-21",
+			desc: "On this day in 2025, Ross Ulbricht was pardoned by just-inaugurated President Donald Trump. Ross was captured on October 1, 2013 (\"Free Ross Day\") and in custody for over 11 years, 3 months, serving two life sentences without parole for his role in creating and running the Silk Road."
+		},
+		{
 			name: "BearWhale Slay Day",
 			date: "2014-10-06",
 			desc: "On this day in 2014, a bitcoin whale posted a 30,000 BTC sell wall, resulting in an epic skirmish between hodlers and the BearWhale. Over the course of six hours, the price stalled at 300 USD until all of the coins sold off and the BearWhale was defeated. You can watch the battle <a href='https://twitter.com/DocumentingBTC/status/1364230687105167362?s=20The'>here</a>."
@@ -59,7 +64,7 @@ module.exports = {
 		{
 			name: "Proof of Keys Day",
 			date: "2019-01-03",
-			desc: "On this day in 2019, to celebrate Bitcoin's 10th Birthday, Trace Mayer started an annual Proof-of-Keys Celebration. Participats declare monetary sovereignty by withdrawing their BTC into their own custory. Not your keys, not your bitcoin! You can read Trace Mayer's original tweet <a href='https://twitter.com/TraceMayer/status/1071870548421066753'>here</a>."
+			desc: "On this day in 2019, to celebrate Bitcoin's 10th Birthday, Trace Mayer started an annual Proof-of-Keys Celebration. Participants declare monetary sovereignty by withdrawing their BTC into their own custody. Not your keys, not your bitcoin! You can read Trace Mayer's original tweet <a href='https://twitter.com/TraceMayer/status/1071870548421066753'>here</a>."
 		},
 		{
 			name: "Genesis Transaction Day",
@@ -69,7 +74,7 @@ module.exports = {
 		{
 			name: "Lightning Pizza Day",
 			date: "2018-02-25",
-			desc: "On this day in 2018, eight years after buying pizza with the famous <a href='./tx/a1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d@57043'>\"Bitcoin Pizza\" transaction</a>, Lazlo Hanyecz returned to buy pizza over the Lightning Network."
+			desc: "On this day in 2018, eight years after buying pizza with the famous <a href='./tx/a1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d@57043'>\"Bitcoin Pizza\" transaction</a>, Laszlo Hanyecz returned to buy pizza over the Lightning Network."
 		},
 		{
 			name: "Mt. Gox Death Day",
@@ -125,6 +130,46 @@ module.exports = {
 			name: "Halving #3 Day",
 			date: "2020-05-11",
 			desc: "On this day in 2020, the third \"Halving\" cut the subsidy from 12.5 BTC to 6.25 BTC."
+		},
+		{
+			name: "Goodbye Satoshi Day",
+			date: "2010-12-12",
+			desc: "On this day in 2010, Satoshi sent <a href='https://bitcointalk.org/index.php?topic=2228.0'>his final message on the BitcoinTalk forum</a>. Then, he logged off, never to return."
+		},
+		{
+			name: "Satoshi's Birthday",
+			date: "1975-04-05",
+			desc: "Satoshi Nakamoto listed their birthday as April 5, 1975. Many have speculated about symbolic significance of this date, with some identifying April 5 as the date that FDR signed <a href='https://en.wikipedia.org/wiki/Executive_Order_6102'>Executive Order 6102</a>, and 1975 as the year that Americans were legally allowed to own gold again, after Nixon's 1971 ban."
+		},
+		{
+			name: "Bitcoin.org Registration Day",
+			date: "2008-08-18",
+			desc: "On this day in 2008, Satoshi Nakamoto registered the first Bitcoin website, bitcoin.org. It has hosted the Satoshi-based-node source code ever since."
+		},
+		{
+			name: "Running Bitcoin Day",
+			date: "2009-01-10",
+			desc: "On this day in 2009, Hal Finney tweeted his iconic '<a href=\"https://x.com/halfin/status/1110302988\">Running bitcoin</a>' tweet, as he joined the network."
+		},
+		{
+			name: "Bitcoin ETFs Day",
+			date: "2024-01-10",
+			desc: "On this day in 2024, after 10 years of denials, the US SEC approved 11 ETF products, enabling BTC price exposure to previously inaccessible capital markets."
+		},
+		{
+			name: "First Transaction Day",
+			date: "2009-01-12",
+			desc: "On this day in 2009, Satoshi transferred BTC via <a href='./tx/f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16'>the first ever (non-coinbase) transaction</a>. The recipient of that historic transaction is none other than Hal Finney."
+		},
+		{
+			name: "Halving #4 Day",
+			date: "2024-04-20",
+			desc: "On this day in 2024, just after midnight UTC, the fourth \"Halving\" cut the subsidy from 6.25 BTC to 3.125 BTC."
+		},
+		{
+			name: "'Hundred K' Day",
+			date: "2024-12-05",
+			desc: "On this day in 2024, at approximately 3:35am UTC, BTC achieved an exchange rate of 100,000 USD at a market cap just shy of 2 Trillion USD."
 		}
 	]
 };

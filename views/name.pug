@@ -1,0 +1,429 @@
+extends layout
+
+block headContent
+	title Namecoin name #{nameQuery}
+
+block content
+	+pageTitle(`Name: ${nameQuery}`)
+
+	if (nameLookupError)
+		- var __dx = nameLookupDiagnosis || { interpretation: "other", primaryRpc: { method: "name_show", params: [nameQuery, { allowExpired: true }], code: null, message: nameLookupError }, nodeStatus: null, mempoolHit: null, prefixHits: [] }
+		- var __interp = __dx.interpretation
+		- var __alertClass = __interp === "node_syncing" ? "alert-info" : (__interp === "bad_param" ? "alert-danger" : "alert-warning")
+
+		.alert(class=__alertClass)
+			case __interp
+				when "never_existed"
+					h5.mb-2 No such name on chain
+					div.mb-2.
+						No Namecoin record exists for #[code= nameQuery].  This means
+						the name has never been registered — there is no
+						<code>name_firstupdate</code> for this exact byte sequence in the
+						chain index.
+				when "expired"
+					h5.mb-2 Name has expired (and the node refused to return it)
+					div.mb-2.
+						#[code= nameQuery] was registered at some point but has since
+						expired.  The explorer normally passes <code>allowExpired: true</code>
+						to <code>name_show</code> so expired names still render, but the
+						node rejected this request anyway.  Most often this means the node
+						is on an old <code>namecoin-core</code> build that doesn't accept
+						the option, or the chain index is mid-rebuild.
+				when "node_syncing"
+					h5.mb-2 Node is still syncing or reindexing
+					div.mb-2.
+						The upstream Namecoin Core node is not yet ready to serve name
+						lookups.  This is normal during initial block download or while
+						a <code>-reindex</code> is in progress — the chain state and
+						name index are still being rebuilt.  Try again once the node
+						reaches the chain tip.
+				when "bad_param"
+					h5.mb-2 Invalid name argument
+					div.mb-2.
+						The node rejected #[code= nameQuery] as a name_show argument.
+						Namecoin names are arbitrary byte sequences (so leading whitespace
+						and other unusual characters are valid), but a few inputs cannot
+						be parsed at all — e.g. invalid UTF-8 when an ASCII encoding was
+						requested.
+				default
+					h5.mb-2 Name lookup failed
+					div.mb-2 No record was returned for #[code= nameQuery].
+
+			hr.my-3
+			div.small.fw-bold.mb-1 How this was determined
+			div.small.mb-2.
+				The explorer asked the upstream Namecoin Core node for this name
+				and the node returned a JSON-RPC error.  All of the steps below ran
+				against the same node that powers the rest of this site.
+
+			dl.row.small.mb-2(style="row-gap:0.4rem")
+				dt.col-sm-3.text-muted RPC call
+				dd.col-sm-9
+					code= __dx.primaryRpc.method + "(" + JSON.stringify(__dx.primaryRpc.params) + ")"
+				dt.col-sm-3.text-muted Error code
+				dd.col-sm-9
+					if (__dx.primaryRpc.code != null)
+						code= __dx.primaryRpc.code
+						span.text-muted.ms-2.
+							(JSON-RPC error code returned by namecoind)
+					else
+						span.text-muted (none — this is a non-RPC error path)
+				dt.col-sm-3.text-muted Error message
+				dd.col-sm-9
+					code.font-monospace.small= __dx.primaryRpc.message
+
+			if (__dx.nodeStatus)
+				div.small.mb-2.
+					<strong>Node status:</strong>
+					height #{__dx.nodeStatus.blocks.toLocaleString()} of
+					#{__dx.nodeStatus.headers.toLocaleString()}
+					if (__dx.nodeStatus.initialblockdownload)
+						|  &mdash; <em>still syncing</em> (verification
+						#{(__dx.nodeStatus.verificationprogress * 100).toFixed(2)}%)
+					else
+						|  &mdash; chain tip reached.
+
+			if (__dx.mempoolHit && __dx.mempoolHit.length)
+				div.alert.alert-success.small.mb-2
+					strong Pending in mempool!
+					|  This name has
+					|  #{__dx.mempoolHit.length}
+					|  unconfirmed name op#{__dx.mempoolHit.length === 1 ? "" : "s"} waiting in the mempool. The page will start showing real data as soon as one of them confirms.
+					ul.mb-0.mt-1
+						each m in __dx.mempoolHit
+							li
+								span.font-monospace.small= m.op || "name_op"
+								|  &middot;
+								a.font-monospace.small.ms-1(href=`./tx/${m.txid}`)= m.txid.slice(0, 16) + "…"
+
+			if (__dx.prefixHits && __dx.prefixHits.length)
+				div.small.mb-2
+					div.fw-bold.mb-1 Did you mean one of these?
+					div.text-muted.small.mb-1.
+						These are the next few names that exist in the chain index when
+						sorted byte-wise from #[code= nameQuery].
+					ul.mb-0.font-monospace
+						each h in __dx.prefixHits
+							li
+								a(href=utils.nameUrl(h.name))= h.name
+								if (h.expired)
+									span.badge.bg-danger.ms-2 Expired
+								span.text-muted.ms-2.small @#{h.height}
+
+			if (__interp === "never_existed")
+				details.small.mt-3
+					summary.text-muted(style="cursor:pointer") What does "never existed" mean exactly?
+					div.mt-2.
+						Namecoin Core's <code>name_show</code> RPC returns error
+						<code>-4 "name never existed"</code> when no
+						<code>name_firstupdate</code> for this exact byte sequence has
+						ever confirmed on the chain.  A <code>name_new</code> alone is
+						<em>not</em> sufficient to create a name on chain — it only
+						pre-commits a salted hash; the name itself does not exist until
+						the matching <code>name_firstupdate</code> confirms ~12 blocks
+						later.  So if all you've seen for this name is a
+						<code>name_new</code> tx, that's why it doesn't show up here.
+						Note also: the namespace prefix matters.  <code>apple</code>,
+						<code>d/apple</code>, and <code>id/apple</code> are three
+						distinct names on chain; only the ones whose firstupdate has
+						confirmed are returned.
+			if (__interp === "node_syncing")
+				details.small.mt-3
+					summary.text-muted(style="cursor:pointer") When will this work?
+					div.mt-2.
+						Name lookups will resume as soon as the node reaches the chain
+						tip.  The node's <code>getblockchaininfo</code> reports it is
+						currently in initial block download or reindex mode.  This page
+						doesn't auto-refresh; reload it once the chain tip is reached.
+	else
+		+contentSection("Summary")
+			.row.g-3
+				.col-md-6
+					div.text-muted.small Name
+					div.font-monospace= nameInfo.name
+				if (namespace && namespace.namespace)
+					.col-md-6
+						div.text-muted.small Namespace
+						div
+							code= namespace.namespace
+							if (namespaceLabel)
+								span.text-muted.ms-2 #{namespaceLabel}
+				.col-md-6
+					div.text-muted.small Registered at height
+					div
+						a(href=`./block-height/${nameInfo.height}`)= nameInfo.height
+				.col-md-6
+					div.text-muted.small Expires in
+					div
+						if (nameInfo.expired)
+							span.badge.bg-danger Expired
+						else
+							span= `${nameInfo.expires_in} blocks`
+				.col-md-6
+					div.text-muted.small Address
+					div
+						a(href=`./address/${nameInfo.address}`).font-monospace.small= nameInfo.address
+				.col-md-6
+					div.text-muted.small Last update tx
+					div
+						a(href=`./tx/${nameInfo.txid}`).font-monospace.small= nameInfo.txid
+
+		if (pendingForName && pendingForName.length)
+			+contentSection(`Pending in mempool (${pendingForName.length})`)
+				p.text-muted.small.mb-3.
+					This name has unconfirmed updates queued in the mempool.
+					Their effects haven't taken hold yet — the data above still
+					reflects the last confirmed state.
+				each entry in pendingForName
+					.mb-3.pb-3.border-bottom
+						.row.g-2.mb-2
+							.col-md-3
+								div.text-muted.small Operation
+								div
+									case entry.op
+										when "name_firstupdate"
+											span.badge.bg-success name_firstupdate
+										when "name_update"
+											span.badge.bg-primary name_update
+										when "name_new"
+											span.badge.bg-secondary name_new
+										default
+											span.badge.bg-dark= entry.op
+							.col-md-9
+								div.text-muted.small Tx
+								div
+									a.font-monospace.small(href=`./tx/${entry.txid}`)= entry.txid
+						if (entry.value)
+							pre.bg-body-tertiary.p-2.rounded-1.small.mb-0.text-break(style="max-height: 12rem; overflow: auto;")
+								code= entry.value
+
+		+contentSection("Value")
+			if (valueRender.kind === "json")
+				div.text-muted.small.mb-2 Decoded as JSON
+				pre.bg-body-tertiary.p-3.rounded-1.small.mb-0
+					code= valueRender.display
+			else if (valueRender.kind === "text")
+				div.text-muted.small.mb-2 #{nameInfo.value_encoding === "ascii" ? "ASCII" : "Text"}
+				pre.bg-body-tertiary.p-3.rounded-1.small.mb-0
+					code= valueRender.display
+			else if (valueRender.kind === "hex")
+				div.text-muted.small.mb-2 Hex (binary value)
+				pre.bg-body-tertiary.p-3.rounded-1.small.mb-0.text-break
+					code= valueRender.display
+			else
+				div.text-muted Empty value
+
+		if (imports && imports.length)
+			+contentSection(`Imports (${imports.reduce((n, e) => n + e.imports.length, 0)})`)
+				p.text-muted.small.mb-3.
+					This record pulls boilerplate from another Namecoin name
+					per <a href="https://github.com/namecoin/proposals/blob/master/ifa-0001.md#import" target="_blank" rel="noopener">ifa-0001 §"import"</a>.
+					Importer items override imported items (including <code>null</code>,
+					which suppresses inherited fields). The spec mandates a
+					recursion limit of 4 levels.
+				.table-responsive
+					table.table.table-sm.mb-0
+						thead
+							tr
+								th(style="width:30%") At node
+								th Import target
+								th Subdomain selector
+						tbody
+							each entry in imports
+								each imp, idx in entry.imports
+									tr
+										td
+											if (idx === 0)
+												if (entry.path.length === 0)
+													span.text-muted (top level)
+												else
+													code.small= entry.path.join(".")
+											else
+												span.text-muted ↳
+										td
+											a.font-monospace(href=utils.nameUrl(imp.name))= imp.name
+										td
+											if (imp.selector)
+												code.small= imp.selector
+											else
+												span.text-muted —
+								if (entry.malformed)
+									tr
+										td(colspan="3")
+											span.badge.bg-warning Malformed import entry at <code>#{entry.path.join(".") || "(top)"}</code>
+
+		- var hasIdentities = identities && (identities.single || (identities.names && identities.names.length));
+		- var hasIdFields = idFields && idFields.length;
+		if (hasIdentities || hasIdFields)
+			+contentSection("Identity")
+				if (namespace && namespace.namespace === "id")
+					p.text-muted.small.mb-3.
+						<strong>NameID</strong> identity record. Each field below is
+						interpreted per the
+						<a href="https://nameid.org/" target="_blank" rel="noopener">NameID convention</a>.
+
+				if (hasIdFields)
+					.table-responsive.mb-3
+						table.table.table-sm.mb-0
+							tbody
+								each f in idFields
+									tr
+										th.text-muted.small(style="width:25%")= f.label
+										td
+											case f.kind
+												when "link"
+													a(href=f.href, rel="noopener", target="_blank")= f.value
+												when "mono"
+													code.small.text-break= f.value
+												default
+													span= f.value
+
+				if (identities.single)
+					div.mb-3
+						div.text-muted.small Nostr (single-identity record)
+						div
+							code.font-monospace.small.text-break= identities.single.npub || identities.single.pubkey
+							if (identities.single.npub)
+								a.ms-2.small(href=`https://njump.me/${identities.single.npub}`, target="_blank", rel="noopener") view on njump.me
+						if (identities.single.relays && identities.single.relays.length)
+							div.text-muted.small.mt-1 Preferred relays:
+							ul.small.font-monospace.mb-0
+								each r in identities.single.relays
+									li= r
+
+				if (identities.names && identities.names.length)
+					div
+						div.text-muted.small.mb-2 NIP-05 identities published under this name
+						.table-responsive
+							table.table.table-sm.mb-0
+								thead
+									tr
+										th NIP-05
+										th Pubkey (npub)
+										th Relays
+								tbody
+									each n in identities.names
+										tr
+											td.font-monospace.small
+												if (n.nip05)
+													= n.nip05
+												else
+													span.text-muted= n.localPart
+											td.font-monospace.small.text-break
+												if (n.npub)
+													a(href=`https://njump.me/${n.npub}`, target="_blank", rel="noopener")= n.npub
+												else
+													= n.hex
+											td
+												if (n.relays && n.relays.length)
+													ul.small.font-monospace.mb-0
+														each r in n.relays
+															li= r
+												else
+													span.text-muted —
+
+		if (nameHistory && nameHistory.length)
+			+contentSection(`History (${nameHistory.length})`)
+				.d-flex.flex-wrap.align-items-center.gap-2.mb-3
+					span.text-muted.small Method:
+					if (nameHistorySource === "name_history")
+						span.badge.bg-success(title="Server has -namehistory enabled and returned the full chain via the name_history RPC.") name_history RPC
+					else if (nameHistorySource === "reconstructed")
+						span.badge.bg-warning.text-dark(title="Server has -namehistory disabled. Reconstructed locally by walking the chain of name UTXOs backwards from name_show.") chain-walk reconstruction
+					else
+						span.badge.bg-secondary unknown
+					a.small.text-decoration-none.ms-1(href="./docs/name-history", title="How does the explorer build name history?") learn more
+
+				p.text-muted.small.mb-3.
+					Full operational chain of this name from
+					<code>name_firstupdate</code> through every <code>name_update</code>
+					up to the current state.  Sorted newest-first; each entry is the
+					latest at the time of that block.
+
+				if (nameHistorySource === "name_history")
+					p.text-muted.small.mb-3.
+						Sourced directly from the upstream Namecoin Core node's
+						<code>name_history</code> RPC, which requires the daemon
+						to be started with <code>-namehistory=1</code>.  This is the
+						cheapest path: the node already has the full operational
+						chain indexed, so the entire history is returned in a single
+						RPC call.
+				else if (nameHistorySource === "reconstructed")
+					p.text-muted.small.mb-3.
+						The upstream Namecoin Core node does not have
+						<code>-namehistory</code> enabled, so the explorer reconstructed
+						this history client-side by walking the chain of name UTXOs
+						backwards from <code>name_show</code>: starting at the current
+						tip, each <code>name_update</code> tx is fetched via
+						<code>getrawtransaction</code> (requires <code>-txindex</code>),
+						its one name-carrying input is identified, and the walk
+						repeats on that prevout until <code>name_firstupdate</code>
+						is reached.
+
+				if (nameHistoryWarnings && nameHistoryWarnings.length)
+					.alert.alert-warning.small.mb-3
+						strong History reconstruction notes:
+						ul.mb-0.mt-1
+							each w in nameHistoryWarnings
+								li= w
+
+				.table-responsive
+					table.table.table-sm.mb-0
+						thead
+							tr
+								th(style="width:6rem") Height
+								th(style="width:11rem") Date
+								th(style="width:9rem") Op
+								th Value
+								th(style="width:18rem") Tx
+						tbody
+							each entry in nameHistory.slice().reverse()
+								- var __valStr = (entry.value == null ? "" : String(entry.value))
+								- var __valTrim = __valStr.trim()
+								- var __valIsJson = (__valTrim.startsWith("{") || __valTrim.startsWith("["))
+								- var __valParsed = null
+								if (__valIsJson)
+									- try { __valParsed = JSON.parse(__valTrim); } catch (_e) { __valParsed = null; }
+								- var __valPretty = __valParsed ? JSON.stringify(__valParsed, null, 2) : __valStr
+								- var __valPreview = __valStr.length > 240 ? (__valStr.slice(0, 240) + "…") : __valStr
+								- var __opLabel = entry.op || "name_update"
+								- var __opBadge = (__opLabel === "name_firstupdate" ? "bg-success" : (__opLabel === "name_new" ? "bg-secondary" : "bg-primary"))
+								tr
+									td
+										if (entry.height != null && entry.height >= 0)
+											a(href=`./block-height/${entry.height}`)= entry.height
+										else
+											span.text-muted —
+									td.small
+										if (entry.blocktime)
+											+timestamp(entry.blocktime, {includeAgo:false})
+										else
+											span.text-muted —
+									td
+										span.badge(class=__opBadge)= __opLabel
+									td
+										if (__valStr.length === 0)
+											span.text-muted.small (empty)
+										else if (__valStr.length <= 240 && !__valIsJson)
+											code.font-monospace.small(style="white-space:pre-wrap; word-break:break-all")= __valStr
+										else
+											details
+												summary(style="cursor:pointer")
+													code.font-monospace.small= __valPreview
+												pre.small.mt-2.mb-0(style="white-space:pre-wrap; word-break:break-all; max-height:24rem; overflow:auto")= __valPretty
+									td
+										if (entry.txid)
+											a.font-monospace.small(href=`./tx/${entry.txid}`)= entry.txid.slice(0, 16) + "…"
+		else if (nameInfo && !nameLookupError)
+			//- We have a name_show but no history at all. Surface the reason.
+			+contentSection("History")
+				p.text-muted.small.mb-0.
+					Could not retrieve a history for this name.  The upstream node has
+					<code>-namehistory</code> disabled and chain-walk reconstruction
+					could not resolve previous name UTXOs (this typically means the
+					node also has <code>-txindex</code> disabled, or the relevant txs
+					have been pruned).
+				if (nameHistoryWarnings && nameHistoryWarnings.length)
+					ul.text-muted.small.mt-2.mb-0
+						each w in nameHistoryWarnings
+							li= w
