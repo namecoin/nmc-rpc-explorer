@@ -4,11 +4,10 @@ const debug = require("debug");
 const debugLog = debug("btcexp:router");
 
 const express = require('express');
-const csurf = require('csurf');
+const csrfApi = require('csurf');
 const router = express.Router();
 const util = require('util');
 const moment = require('moment');
-const bitcoinCore = require("btc-rpc-client");
 const qrcode = require('qrcode');
 const bitcoinjs = require('bitcoinjs-lib');
 const bip32 = require('bip32');
@@ -27,11 +26,12 @@ const config = require("./../app/config.js");
 const coreApi = require("./../app/api/coreApi.js");
 const addressApi = require("./../app/api/addressApi.js");
 const rpcApi = require("./../app/api/rpcApi.js");
+const nameApi = require("./../app/api/nameApi.js");
 const btcQuotes = require("./../app/coins/btcQuotes.js");
 
-const forceCsrf = csurf({ ignoreMethods: [] });
+const forceCsrf = csrfApi({ ignoreMethods: [] });
 
-var noTxIndexMsg = "\n\nYour node does not have **txindex** enabled. Without it, you can only lookup wallet, mempool, and recently confirmed transactions by their **txid**. Searching for non-wallet transactions that were confirmed more than "+config.noTxIndexSearchDepth+" blocks ago is only possible if the confirmed block height is available.";
+let noTxIndexMsg = "\n\nYour node does not have **txindex** enabled. Without it, you can only lookup wallet, mempool, and recently confirmed transactions by their **txid**. Searching for non-wallet transactions that were confirmed more than "+config.noTxIndexSearchDepth+" blocks ago is only possible if the confirmed block height is available.";
 
 router.get("/", asyncHandler(async (req, res, next) => {
 	try {
@@ -67,15 +67,11 @@ router.get("/", asyncHandler(async (req, res, next) => {
 		res.locals.offset = 0;
 		res.locals.sort = "desc";
 
-		var feeConfTargets = [1, 6, 144, 1008];
+		let feeConfTargets = [1, 6, 144, 1008];
 		res.locals.feeConfTargets = feeConfTargets;
 
 
-		var promises = [];
-
-		promises.push(utils.timePromise("homepage.getMempoolInfo", async () => {
-			res.locals.mempoolInfo = await coreApi.getMempoolInfo();
-		}, perfResults));
+		let promises = [];
 
 		promises.push(utils.timePromise("homepage.getMempoolInfo", async () => {
 			res.locals.mempoolInfo = await coreApi.getMempoolInfo();
@@ -88,10 +84,10 @@ router.get("/", asyncHandler(async (req, res, next) => {
 		promises.push(utils.timePromise("homepage.getSmartFeeEstimates", async () => {
 			const rawSmartFeeEstimates = await coreApi.getSmartFeeEstimates("CONSERVATIVE", feeConfTargets);
 
-			var smartFeeEstimates = {};
+			let smartFeeEstimates = {};
 
-			for (var i = 0; i < feeConfTargets.length; i++) {
-				var rawSmartFeeEstimate = rawSmartFeeEstimates[i];
+			for (let i = 0; i < feeConfTargets.length; i++) {
+				let rawSmartFeeEstimate = rawSmartFeeEstimates[i];
 
 				if (rawSmartFeeEstimate.errors) {
 					smartFeeEstimates[feeConfTargets[i]] = "?";
@@ -124,15 +120,15 @@ router.get("/", asyncHandler(async (req, res, next) => {
 		res.locals.difficultyPeriod = parseInt(Math.floor(getblockchaininfo.blocks / coinConfig.difficultyAdjustmentBlockCount));
 			
 
-		var blockHeights = [];
+		let blockHeights = [];
 		if (getblockchaininfo.blocks) {
 			// +1 to page size here so we have the next block to calculate T.T.M.
-			for (var i = 0; i < (config.site.homepage.recentBlocksCount + 1); i++) {
+			for (let i = 0; i < (config.site.homepage.recentBlocksCount + 1); i++) {
 				blockHeights.push(getblockchaininfo.blocks - i);
 			}
 		} else if (global.activeBlockchain == "regtest") {
-			// hack: default regtest node returns getblockchaininfo.blocks=0, despite having a genesis block
-			// hack this to display the genesis block
+			// hack: default regtest node returns getblockchaininfo.blocks=0, despite
+			// having a genesis block; hack this to display the genesis block
 			blockHeights.push(0);
 		}
 
@@ -142,8 +138,8 @@ router.get("/", asyncHandler(async (req, res, next) => {
 			if (rawblockstats && rawblockstats.length > 0 && rawblockstats[0] != null) {
 				res.locals.blockstatsByHeight = {};
 
-				for (var i = 0; i < rawblockstats.length; i++) {
-					var blockstats = rawblockstats[i];
+				for (let i = 0; i < rawblockstats.length; i++) {
+					let blockstats = rawblockstats[i];
 
 					res.locals.blockstatsByHeight[blockstats.height] = blockstats;
 				}
@@ -163,7 +159,7 @@ router.get("/", asyncHandler(async (req, res, next) => {
 		}));
 
 		
-		var targetBlocksPerDay = 24 * 60 * 60 / global.coinConfig.targetBlockTimeSeconds;
+		let targetBlocksPerDay = 24 * 60 * 60 / global.coinConfig.targetBlockTimeSeconds;
 		res.locals.targetBlocksPerDay = targetBlocksPerDay;
 
 		if (false && getblockchaininfo.chain !== 'regtest') {
@@ -173,11 +169,11 @@ router.get("/", asyncHandler(async (req, res, next) => {
 				resolve();
 			}));*/
 
-			var chainTxStatsIntervals = [ [targetBlocksPerDay, "24 hours"], [7 * targetBlocksPerDay, "7 days"], [30 * targetBlocksPerDay, "30 days"] ]
+			let chainTxStatsIntervals = [ [targetBlocksPerDay, "24 hours"], [7 * targetBlocksPerDay, "7 days"], [30 * targetBlocksPerDay, "30 days"] ]
 				.filter(dat => dat[0] <= getblockchaininfo.blocks);
 
 			res.locals.chainTxStats = {};
-			for (var i = 0; i < chainTxStatsIntervals.length; i++) {
+			for (let i = 0; i < chainTxStatsIntervals.length; i++) {
 				promises.push(utils.timePromise(`homepage.getChainTxStats.${chainTxStatsIntervals[i][0]}`, async () => {
 					res.locals.chainTxStats[chainTxStatsIntervals[i][0]] = await coreApi.getChainTxStats(chainTxStatsIntervals[i][0]);
 				}, perfResults));
@@ -211,67 +207,20 @@ router.get("/", asyncHandler(async (req, res, next) => {
 
 
 		await utils.awaitPromises(promises);
-		
-		
-		var firstBlockHeader = res.locals.difficultyPeriodFirstBlockHeader;
-		var currentBlock = res.locals.latestBlocks[0];
-		var heightDiff = currentBlock.height - firstBlockHeader.height;
-		var blockCount = heightDiff + 1;
-		var timeDiff = currentBlock.mediantime - firstBlockHeader.mediantime;
-		var timePerBlock = timeDiff / heightDiff;
-		var timePerBlockDuration = moment.duration(timePerBlock * 1000);
-		var daysUntilAdjustment = new Decimal(res.locals.blocksUntilDifficultyAdjustment).times(timePerBlock).dividedBy(60 * 60 * 24);
-		var hoursUntilAdjustment = new Decimal(res.locals.blocksUntilDifficultyAdjustment).times(timePerBlock).dividedBy(60 * 60);
-		var duaDP1 = daysUntilAdjustment.toDP(1);
-		var daysUntilAdjustmentStr = daysUntilAdjustment > 1 ? `~${duaDP1} day${duaDP1 == "1" ? "" : "s"}` : "< 1 day";
-		var hoursUntilAdjustmentStr = hoursUntilAdjustment > 1 ? `~${hoursUntilAdjustment.toDP(0)} hr${hoursUntilAdjustment.toDP(1) == "1" ? "" : "s"}` : "< 1 hr";
-		var nowTime = new Date().getTime() / 1000;
-		var dt = nowTime - firstBlockHeader.time;
-		var timePerBlock2 = dt / heightDiff;
-		var predictedBlockCount = dt / coinConfig.targetBlockTimeSeconds;
 
-		var blockRatioPercent = new Decimal(blockCount / predictedBlockCount).times(100);
-		if (blockRatioPercent > 400) {
-			blockRatioPercent = new Decimal(400);
-		}
-		if (blockRatioPercent < 25) {
-			blockRatioPercent = new Decimal(25);
-		}
 
-		if (predictedBlockCount > blockCount) {
-			var diffAdjPercent = new Decimal(100).minus(blockRatioPercent).times(-1);
-			var diffAdjText = `Blocks during the current difficulty epoch have taken this long, on average, to be mined. If this pace continues, then in ${res.locals.blocksUntilDifficultyAdjustment.toLocaleString()} block${res.locals.blocksUntilDifficultyAdjustment == 1 ? "" : "s"} (${daysUntilAdjustmentStr}) the difficulty will adjust downward: -${diffAdjPercent.toDP(1)}%`;
-			var diffAdjSign = "-";
-			var textColorClass = "text-danger";
 
-		} else {
-			var diffAdjPercent = blockRatioPercent.minus(new Decimal(100));
-			var diffAdjText = `Blocks during the current difficulty epoch have taken this long, on average, to be mined. If this pace continues, then in ${res.locals.blocksUntilDifficultyAdjustment.toLocaleString()} block${res.locals.blocksUntilDifficultyAdjustment == 1 ? "" : "s"} (${daysUntilAdjustmentStr}) the difficulty will adjust upward: +${diffAdjPercent.toDP(1)}%`;
-			var diffAdjSign = "+";
-			var textColorClass = "text-success";
-		}
+		let eraStartBlockHeader = res.locals.difficultyPeriodFirstBlockHeader;
+		let currentBlock = res.locals.latestBlocks[0];
 
-		res.locals.difficultyAdjustmentData = {
-			estimateAvailable: blockCount > 30 && !isNaN(diffAdjPercent),
+		res.locals.difficultyAdjustmentData = utils.difficultyAdjustmentEstimates(eraStartBlockHeader, currentBlock);
 
-			blockCount: blockCount,
-			blocksLeft: res.locals.blocksUntilDifficultyAdjustment,
-			daysLeftStr: daysUntilAdjustmentStr,
-			timeLeftStr: (daysUntilAdjustment < 1 ? hoursUntilAdjustmentStr : daysUntilAdjustmentStr),
-			calculationBlockCount: heightDiff,
-			currentEpoch: res.locals.difficultyPeriod,
+		res.locals.nextHalvingData = utils.nextHalvingEstimates(
+			res.locals.difficultyPeriodFirstBlockHeader,
+			res.locals.latestBlocks[0],
+			res.locals.difficultyAdjustmentData);
 
-			delta: diffAdjPercent,
-			sign: diffAdjSign,
 
-			timePerBlock: timePerBlock,
-			firstBlockTime: firstBlockHeader.time,
-			nowTime: nowTime,
-			dt: dt,
-			predictedBlockCount: predictedBlockCount,
-
-			//nameDesc: `Estimate for the difficulty adjustment that will occur in ${res.locals.blocksUntilDifficultyAdjustment.toLocaleString()} block${res.locals.blocksUntilDifficultyAdjustment == 1 ? "" : "s"} (${daysUntilAdjustmentStr}). This is calculated using the average block time over the last ${heightDiff} block(s). This estimate becomes more reliable as the difficulty epoch nears its end.`,
-		};
 
 		res.locals.perfResults = perfResults;
 
@@ -382,13 +331,13 @@ router.get("/peers", asyncHandler(async (req, res, next) => {
 		
 		await utils.awaitPromises(promises);
 
-		var peerSummary = res.locals.peerSummary;
+		let peerSummary = res.locals.peerSummary;
 
-		var peerIps = [];
-		for (var i = 0; i < peerSummary.getpeerinfo.length; i++) {
-			var ipWithPort = peerSummary.getpeerinfo[i].addr;
+		let peerIps = [];
+		for (let i = 0; i < peerSummary.getpeerinfo.length; i++) {
+			let ipWithPort = peerSummary.getpeerinfo[i].addr;
 			if (ipWithPort.lastIndexOf(":") >= 0) {
-				var ip = ipWithPort.substring(0, ipWithPort.lastIndexOf(":"));
+				let ip = ipWithPort.substring(0, ipWithPort.lastIndexOf(":"));
 				if (ip.trim().length > 0) {
 					peerIps.push(ip.trim());
 				}
@@ -424,10 +373,10 @@ router.get("/peers", asyncHandler(async (req, res, next) => {
 }));
 
 router.post("/connect", function(req, res, next) {
-	var host = req.body.host;
-	var port = req.body.port;
-	var username = req.body.username;
-	var password = req.body.password;
+	let host = req.body.host;
+	let port = req.body.port;
+	let username = req.body.username;
+	let password = req.body.password;
 
 	res.cookie('rpc-host', host);
 	res.cookie('rpc-port', port);
@@ -437,7 +386,7 @@ router.post("/connect", function(req, res, next) {
 	req.session.port = port;
 	req.session.username = username;
 
-	var newClient = new bitcoinCore({
+	let newClient = new bitcoinCore({
 		host: host,
 		port: port,
 		username: username,
@@ -496,7 +445,7 @@ router.get("/changeSetting", function(req, res, next) {
 
 		req.session.userSettings[req.query.name.toString()] = req.query.value.toString();
 
-		var userSettings = JSON.parse(req.cookies["user-settings"] || "{}");
+		let userSettings = JSON.parse(req.cookies["user-settings"] || "{}");
 		userSettings[req.query.name] = req.query.value;
 
 		res.cookie("user-settings", JSON.stringify(userSettings));
@@ -549,9 +498,9 @@ router.get("/blocks", asyncHandler(async (req, res, next) => {
 		const { perfId, perfResults } = utils.perfLogNewItem({action:"blocks"});
 		res.locals.perfId = perfId;
 
-		var limit = config.site.browseBlocksPageSize;
-		var offset = 0;
-		var sort = "desc";
+		let limit = config.site.browseBlocksPageSize;
+		let offset = 0;
+		let sort = "desc";
 
 		if (req.query.limit) {
 			limit = parseInt(req.query.limit);
@@ -573,20 +522,20 @@ router.get("/blocks", asyncHandler(async (req, res, next) => {
 		// if pruning is active, global.pruneHeight is used when displaying this page
 		// global.pruneHeight is updated whenever we send a getblockchaininfo RPC to the node
 
-		var getblockchaininfo = await utils.timePromise("blocks.geoLocateIpAddresses", coreApi.getBlockchainInfo, perfResults);
+		let getblockchaininfo = await utils.timePromise("blocks.geoLocateIpAddresses", coreApi.getBlockchainInfo, perfResults);
 
 		res.locals.blockCount = getblockchaininfo.blocks;
 		res.locals.blockOffset = offset;
 
-		var blockHeights = [];
+		let blockHeights = [];
 		if (sort == "desc") {
-			for (var i = (getblockchaininfo.blocks - offset); i > (getblockchaininfo.blocks - offset - limit - 1); i--) {
+			for (let i = (getblockchaininfo.blocks - offset); i > (getblockchaininfo.blocks - offset - limit - 1); i--) {
 				if (i >= 0) {
 					blockHeights.push(i);
 				}
 			}
 		} else {
-			for (var i = offset - 1; i < (offset + limit); i++) {
+			for (let i = offset - 1; i < (offset + limit); i++) {
 				if (i >= 0) {
 					blockHeights.push(i);
 				}
@@ -598,7 +547,7 @@ router.get("/blocks", asyncHandler(async (req, res, next) => {
 		});
 
 
-		var promises = [];
+		let promises = [];
 
 		promises.push(utils.timePromise("blocks.getBlocksByHeight", async () => {
 			res.locals.blocks = await coreApi.getBlocksByHeight(blockHeights);
@@ -607,13 +556,13 @@ router.get("/blocks", asyncHandler(async (req, res, next) => {
 		
 		promises.push(utils.timePromise("blocks.getBlocksByHeight", async () => {
 			try {
-				var rawblockstats = await coreApi.getBlocksStatsByHeight(blockHeights);
+				let rawblockstats = await coreApi.getBlocksStatsByHeight(blockHeights);
 
 				if (rawblockstats != null && rawblockstats.length > 0 && rawblockstats[0] != null) {
 					res.locals.blockstatsByHeight = {};
 
-					for (var i = 0; i < rawblockstats.length; i++) {
-						var blockstats = rawblockstats[i];
+					for (let i = 0; i < rawblockstats.length; i++) {
+						let blockstats = rawblockstats[i];
 
 						res.locals.blockstatsByHeight[blockstats.height] = blockstats;
 					}
@@ -653,7 +602,7 @@ router.get("/blocks", asyncHandler(async (req, res, next) => {
 
 router.get("/mining-summary", asyncHandler(async (req, res, next) => {
 	try {
-		var getblockchaininfo = await utils.timePromise("mining-summary.getBlockchainInfo", coreApi.getBlockchainInfo);
+		let getblockchaininfo = await utils.timePromise("mining-summary.getBlockchainInfo", coreApi.getBlockchainInfo);
 
 		res.locals.currentBlockHeight = getblockchaininfo.blocks;
 
@@ -699,9 +648,6 @@ router.get("/xyzpub/:extendedPubkey", asyncHandler(async (req, res, next) => {
 
 
 		res.locals.relatedKeys = [];
-
-		const receiveAddresses = [];
-		const changeAddresses = [];
 
 		const xpub_tpub = global.activeBlockchain == "main" ? "xpub" : "tpub";
 		const ypub_upub = global.activeBlockchain == "main" ? "ypub" : "upub";
@@ -838,6 +784,34 @@ router.get("/xyzpub/:extendedPubkey", asyncHandler(async (req, res, next) => {
 			res.locals.bip32Path = "-";
 		}
 
+		// Cumulate balanceSat of all addresses
+		res.locals.balanceSat = 0;
+
+		// Loop over the 2 types addresses (first receive and then change)
+		let allAddresses = [res.locals.receiveAddresses, res.locals.changeAddresses];
+		res.locals.receiveAddresses = [];
+		res.locals.changeAddresses = [];
+		for (let i = 0; i < allAddresses.length; i++) {
+			// Duplicate addresses and change them to addressDetails objects with 3 properties (address, balanceSat, txCount)
+			let addresses = [...allAddresses[i]];
+			for (let j = 0; j < addresses.length; j++) {
+				const address = addresses[j];
+				const validateaddressResult = await coreApi.getAddress(address);
+
+				// No need to paginate request => use a high limit value
+				const addressDetailsResult = await addressApi.getAddressDetails(address, validateaddressResult.scriptPubKey, "desc", 100, 0);
+
+				// In case of errors, we just skip this address result
+				if (Array.isArray(addressDetailsResult.errors) && addressDetailsResult.errors.length == 0) {
+					res.locals.balanceSat += addressDetailsResult.addressDetails.balanceSat;
+					const addressDetails = { ...addressDetailsResult.addressDetails, address};
+					if (i == 0)
+						res.locals.receiveAddresses.push(addressDetails);
+					else
+						res.locals.changeAddresses.push(addressDetails);
+				}
+			}
+		}
 
 		await utils.timePromise("extended-public-key.render", async () => {
 			res.render("extended-public-key");
@@ -886,14 +860,54 @@ router.get("/block-stats", asyncHandler(async (req, res, next) => {
 
 router.get("/mining-template", asyncHandler(async (req, res, next) => {
 	// url changed
-	res.redirect("./next-block");
+	res.redirect(301, "./next-block");
 }));
 
 router.get("/next-block", asyncHandler(async (req, res, next) => {
 	const blockTemplate = await coreApi.getBlockTemplate();
 
+	// Decorate the next-block transaction list with any pending name operations.
+	// `getblocktemplate` returns stripped txs (no `vout[].scriptPubKey.nameOp`),
+	// so we ask Namecoin Core for `name_pending` once and intersect by txid.
+	// O(name-ops-in-mempool), not O(mempool size).
+	let pendingNameOps = [];
+	let pendingNameOpsError = null;
+	try {
+		const pending = await nameApi.namePending();
+		if (Array.isArray(pending)) pendingNameOps = pending;
+	} catch (err) {
+		pendingNameOpsError = err.message || String(err);
+	}
+
+	const nameOpsByTxid = {};
+	const nextBlockTxidSet = new Set(blockTemplate.transactions.map(t => t.txid));
+	for (const p of pendingNameOps) {
+		if (!p || !p.op || !p.txid) continue;
+		if (!nextBlockTxidSet.has(p.txid)) continue;
+		const valueRender = nameApi.renderNameValue(p.value, p.value_encoding);
+		const row = {
+			op: p.op,
+			txid: p.txid,
+			vout: typeof p.vout === "number" ? p.vout : null,
+			name: p.name || null,
+			name_encoding: p.name_encoding || null,
+			namespace: p.name ? nameApi.splitNamespace(p.name) : null,
+			value: p.value || null,
+			value_encoding: p.value_encoding || null,
+			valueRender,
+			hash: p.hash || null,
+			rand: p.rand || null,
+		};
+		if (!nameOpsByTxid[p.txid]) nameOpsByTxid[p.txid] = [];
+		nameOpsByTxid[p.txid].push(row);
+	}
+	res.locals.nameOpsByTxid = nameOpsByTxid;
+	res.locals.nameOpsTotal = Object.values(nameOpsByTxid).reduce((n, arr) => n + arr.length, 0);
+	res.locals.nameOpsError = pendingNameOpsError;
+
 	res.locals.minFeeRate = 1000000;
 	res.locals.maxFeeRate = -1;
+	res.locals.medianFeeRate = -1;
 
 	const parentTxIndexes = new Set();
 	blockTemplate.transactions.forEach(tx => {
@@ -904,13 +918,14 @@ router.get("/next-block", asyncHandler(async (req, res, next) => {
 		}
 	});
 
-	var txIndex = 1;
+	let txIndex = 1;
+	let feeRates = [];
 	blockTemplate.transactions.forEach(tx => {
 		let feeRate = tx.fee / tx.weight * 4;
 
 		if (tx.depends && tx.depends.length > 0) {
-			var totalFee = tx.fee;
-			var totalWeight = tx.weight;
+			let totalFee = tx.fee;
+			let totalWeight = tx.weight;
 
 			tx.depends.forEach(index => {
 				totalFee += blockTemplate.transactions[index - 1].fee;
@@ -925,6 +940,8 @@ router.get("/next-block", asyncHandler(async (req, res, next) => {
 		// their effective fee rate (which takes descendant fee rates
 		// into account)
 		if (!parentTxIndexes.has(txIndex) && (!tx.depends || tx.depends.length == 0)) {
+			feeRates.push(feeRate);
+
 			if (feeRate > res.locals.maxFeeRate) {
 				res.locals.maxFeeRate = feeRate;
 			}
@@ -936,6 +953,10 @@ router.get("/next-block", asyncHandler(async (req, res, next) => {
 
 		txIndex++;
 	});
+
+	if (feeRates.length > 0) {
+		res.locals.medianFeeRate = feeRates[Math.floor(feeRates.length / 2)];
+	}
 
 	res.locals.blockTemplate = blockTemplate;
 
@@ -962,11 +983,19 @@ router.post("/search", function(req, res, next) {
 		return;
 	}
 
-	var query = req.body.query.toLowerCase().trim();
-	var rawCaseQuery = req.body.query.trim();
+	let query = req.body.query.toLowerCase().trim();
+	let rawCaseQuery = req.body.query.trim();
 
 	req.session.query = req.body.query;
-	
+
+	// Namecoin name lookup: <namespace>/<label> (e.g. d/testls, id/m).
+	// Use utils.nameUrl so the namespace separator stays a literal `/` in
+	// the redirect path: Apache (a common reverse proxy) rejects encoded
+	// slashes (%2F) with 404 by default (AllowEncodedSlashes Off).
+	if (config.coin == "NMC" && /^[a-z0-9_]+\/[\x20-\x7e]{1,250}$/.test(rawCaseQuery)) {
+		return res.redirect(utils.nameUrl(rawCaseQuery));
+	}
+
 	// xpub/ypub/zpub -> redirect: /xyzpub/XXX
 	if (rawCaseQuery.match(/^(xpub|ypub|zpub|Ypub|Zpub).*$/)) {
 		res.redirect(`./xyzpub/${rawCaseQuery}`);
@@ -987,7 +1016,20 @@ router.post("/search", function(req, res, next) {
 		return res.redirect("./tx/" + query);
 	}
 
-	if (query.length == 64) {
+	let parseAddressData = utils.tryParseAddress(rawCaseQuery);
+
+	if (false) {
+		if (parseAddressData.errors) {
+			parseAddressData.errors.forEach(err => {
+				utils.logError("19238rfehdusd", err, {address:query});
+			});
+		}
+	}
+
+	if (parseAddressData.parsedAddress) {
+		res.redirect("./address/" + rawCaseQuery);
+
+	} else if (query.length == 64) {
 		coreApi.getRawTransaction(query).then(function(tx) {
 			res.redirect("./tx/" + query);
 
@@ -1016,17 +1058,9 @@ router.post("/search", function(req, res, next) {
 			res.redirect("./");
 		});
 	} else {
-		coreApi.getAddress(rawCaseQuery).then(function(validateaddress) {
-			if (validateaddress && validateaddress.isvalid) {
-				res.redirect("./address/" + rawCaseQuery);
+		req.session.userMessage = "No results found for query: " + rawCaseQuery;
 
-				return;
-			}
-
-			req.session.userMessage = "No results found for query: " + rawCaseQuery;
-
-			res.redirect("./");
-		});
+		res.redirect("./");
 	}
 });
 
@@ -1035,14 +1069,14 @@ router.get("/block-height/:blockHeight", asyncHandler(async (req, res, next) => 
 		const { perfId, perfResults } = utils.perfLogNewItem({action:"block-height"});
 		res.locals.perfId = perfId;
 
-		var blockHeight = parseInt(req.params.blockHeight);
+		let blockHeight = parseInt(req.params.blockHeight);
 
 		res.locals.blockHeight = blockHeight;
 
 		res.locals.result = {};
 
-		var limit = config.site.blockTxPageSize;
-		var offset = 0;
+		let limit = config.site.blockTxPageSize;
+		let offset = 0;
 
 		res.locals.maxTxOutputDisplayCount = 15;
 
@@ -1072,7 +1106,7 @@ router.get("/block-height/:blockHeight", asyncHandler(async (req, res, next) => 
 
 		res.locals.result.getblockbyheight = result;
 
-		var promises = [];
+		let promises = [];
 
 		promises.push(utils.timePromise("block-height.getBlockByHashWithTransactions", async () => {
 			const blockWithTransactions = await coreApi.getBlockByHashWithTransactions(result.hash, limit, offset);
@@ -1103,8 +1137,17 @@ router.get("/block-height/:blockHeight", asyncHandler(async (req, res, next) => 
 		await utils.awaitPromises(promises);
 
 
-		if (global.specialBlocks && global.specialBlocks[res.locals.result.getblock.hash]) {
-			let funInfo = global.specialBlocks[res.locals.result.getblock.hash];
+		// Guard: getBlockByHashWithTransactions can fail (e.g. an inner getrawtransaction
+		// rejected and awaitPromises swallowed the rejection above). Without this guard
+		// the next line dereferences res.locals.result.getblock.hash on undefined and
+		// the whole /block-height/<n> route ends up rendering as `Block: Error` with the
+		// generic 'Cannot read properties of undefined (reading \'hash\')' page.
+		// The block.pug template already handles result.getblock being missing, so we
+		// just need to skip the specialBlocks lookup and pick a sensible meta title.
+		const __getblockForMeta = res.locals.result.getblock;
+
+		if (__getblockForMeta && global.specialBlocks && global.specialBlocks[__getblockForMeta.hash]) {
+			let funInfo = global.specialBlocks[__getblockForMeta.hash];
 
 			res.locals.metaTitle = funInfo.summary;
 
@@ -1115,7 +1158,7 @@ router.get("/block-height/:blockHeight", asyncHandler(async (req, res, next) => 
 				res.locals.metaDesc = "";
 			}
 		} else {
-			res.locals.metaTitle = `Bitcoin Block #${blockHeight.toLocaleString()}`;
+			res.locals.metaTitle = `${coinConfig.name} Block #${blockHeight.toLocaleString()}`;
 			res.locals.metaDesc = "";
 		}
 		
@@ -1127,7 +1170,7 @@ router.get("/block-height/:blockHeight", asyncHandler(async (req, res, next) => 
 		next();
 
 	} catch (err) {
-		res.locals.userMessageMarkdown = `Failed loading block: height=**${blockHeight}**`;
+		res.locals.userMessageMarkdown = `Failed loading block: height=**${req.params.blockHeight}**`;
 
 		res.locals.pageErrors.push(utils.logError("389wer07eghdd", err));
 
@@ -1144,14 +1187,14 @@ router.get("/block/:blockHash", asyncHandler(async (req, res, next) => {
 		const { perfId, perfResults } = utils.perfLogNewItem({action:"block"});
 		res.locals.perfId = perfId;
 
-		var blockHash = utils.asHash(req.params.blockHash);
+		let blockHash = utils.asHash(req.params.blockHash);
 
 		res.locals.blockHash = blockHash;
 
 		res.locals.result = {};
 
-		var limit = config.site.blockTxPageSize;
-		var offset = 0;
+		let limit = config.site.blockTxPageSize;
+		let offset = 0;
 
 		res.locals.maxTxOutputDisplayCount = 15;
 
@@ -1174,7 +1217,7 @@ router.get("/block/:blockHash", asyncHandler(async (req, res, next) => {
 		res.locals.offset = offset;
 		res.locals.paginationBaseUrl = "./block/" + blockHash;
 
-		var promises = [];
+		let promises = [];
 
 		promises.push(utils.timePromise("block.getBlockByHashWithTransactions", async () => {
 			const blockWithTransactions = await coreApi.getBlockByHashWithTransactions(blockHash, limit, offset);
@@ -1204,8 +1247,13 @@ router.get("/block/:blockHash", asyncHandler(async (req, res, next) => {
 		await utils.awaitPromises(promises);
 
 
-		if (global.specialBlocks && global.specialBlocks[res.locals.result.getblock.hash]) {
-			let funInfo = global.specialBlocks[res.locals.result.getblock.hash];
+		// Mirror of the guard in /block-height/:blockHeight: if getBlockByHashWithTransactions
+		// silently rejected, res.locals.result.getblock is undefined and dereferencing .hash
+		// here would crash the whole route. block.pug already handles a missing getblock.
+		const __getblockForMeta = res.locals.result.getblock;
+
+		if (__getblockForMeta && global.specialBlocks && global.specialBlocks[__getblockForMeta.hash]) {
+			let funInfo = global.specialBlocks[__getblockForMeta.hash];
 
 			res.locals.metaTitle = funInfo.summary;
 
@@ -1216,8 +1264,12 @@ router.get("/block/:blockHash", asyncHandler(async (req, res, next) => {
 				res.locals.metaDesc = "";
 			}
 
+		} else if (__getblockForMeta) {
+			res.locals.metaTitle = `${coinConfig.name} Block ${utils.ellipsizeMiddle(__getblockForMeta.hash, 16)}`;
+			res.locals.metaDesc = "";
+
 		} else {
-			res.locals.metaTitle = `Bitcoin Block ${utils.ellipsizeMiddle(res.locals.result.getblock.hash, 16)}`;
+			res.locals.metaTitle = `${coinConfig.name} Block ${utils.ellipsizeMiddle(blockHash, 16)}`;
 			res.locals.metaDesc = "";
 		}
 
@@ -1287,7 +1339,7 @@ router.get("/predicted-blocks-old", asyncHandler(async (req, res, next) => {
 
 		let currentBlock = Object.assign({}, blockTemplate);
 
-		for (var i = 0; i < mempoolTxSummaries.length; i++) {
+		for (let i = 0; i < mempoolTxSummaries.length; i++) {
 			const tx = mempoolTxSummaries[i];
 
 			tx.frw = tx.f / tx.w;
@@ -1329,18 +1381,16 @@ router.get("/predicted-blocks-old", asyncHandler(async (req, res, next) => {
 }));
 
 router.get("/block-analysis/:blockHashOrHeight", function(req, res, next) {
-	var blockHashOrHeight = utils.asHashOrHeight(req.params.blockHashOrHeight);
+	let blockHashOrHeight = utils.asHashOrHeight(req.params.blockHashOrHeight);
 
-	var goWithBlockHash = function(blockHash) {
-		var blockHash = blockHash;
-
+	let goWithBlockHash = function(blockHash) {
 		res.locals.blockHash = blockHash;
 
 		res.locals.result = {};
 
-		var txResults = [];
+		let txResults = [];
 
-		var promises = [];
+		let promises = [];
 
 		res.locals.result = {};
 
@@ -1389,9 +1439,9 @@ router.get("/tx/:transactionId", asyncHandler(async (req, res, next) => {
 		const { perfId, perfResults } = utils.perfLogNewItem({action:"transaction"});
 		res.locals.perfId = perfId;
 
-		var txid = utils.asHash(req.params.transactionId);
+		let txid = utils.asHash(req.params.transactionId);
 
-		var output = -1;
+		let output = -1;
 		if (req.query.output) {
 			output = parseInt(req.query.output);
 		}
@@ -1411,7 +1461,7 @@ router.get("/tx/:transactionId", asyncHandler(async (req, res, next) => {
 
 		let txInputLimit = (res.locals.crawlerBot) ? 3 : -1;
 
-		var txPromise = req.query.blockHeight ? 
+		let txPromise = req.query.blockHeight ? 
 				async () => {
 					const block = await coreApi.getBlockByHeight(parseInt(req.query.blockHeight));
 					res.locals.block = block;
@@ -1424,7 +1474,7 @@ router.get("/tx/:transactionId", asyncHandler(async (req, res, next) => {
 
 		const rawTxResult = await utils.timePromise("tx.getRawTransactionsWithInputs", txPromise, perfResults);
 
-		var tx = rawTxResult.transactions[0];
+		let tx = rawTxResult.transactions[0];
 
 		res.locals.tx = tx;
 		res.locals.isCoinbaseTx = tx.vin[0].coinbase;
@@ -1446,7 +1496,8 @@ router.get("/tx/:transactionId", asyncHandler(async (req, res, next) => {
 			
 		} else {
 			promises.push(utils.timePromise("tx.getblockheader", async () => {
-				res.locals.result.getblock = await global.rpcClient.command('getblockheader', tx.blockhash);
+				let rpcResult = await rpcApi.getRpcDataWithParams({method:'getblockheader', parameters:[tx.blockhash]});
+				res.locals.result.getblock = rpcResult;
 			}, perfResults));
 		}
 
@@ -1504,13 +1555,15 @@ router.get("/tx/:transactionId", asyncHandler(async (req, res, next) => {
 }));
 
 router.get("/address/:address", asyncHandler(async (req, res, next) => {
+	let address = utils.asAddress(req.params.address);
+
 	try {
 		const { perfId, perfResults } = utils.perfLogNewItem({action:"address"});
 		res.locals.perfId = perfId;
 
-		var limit = config.site.addressTxPageSize;
-		var offset = 0;
-		var sort = "desc";
+		let limit = config.site.addressTxPageSize;
+		let offset = 0;
+		let sort = "desc";
 
 		res.locals.maxTxOutputDisplayCount = config.site.addressPage.txOutputMaxDefaultDisplay;
 
@@ -1535,8 +1588,6 @@ router.get("/address/:address", asyncHandler(async (req, res, next) => {
 		}
 
 
-		var address = utils.asAddress(req.params.address);
-
 		res.locals.metaTitle = `Bitcoin Address ${address}`;
 
 		res.locals.address = address;
@@ -1549,70 +1600,31 @@ router.get("/address/:address", asyncHandler(async (req, res, next) => {
 		
 		res.locals.result = {};
 
-		var addressEncoding = "unknown";
+		let parseAddressData = utils.tryParseAddress(address);
 
-		var base58Error = null;
-		var bech32Error = null;
-		var bech32mError = null;
+		if (parseAddressData.parsedAddress) {
+			//console.log("address.parse: " + JSON.stringify(parseAddressData));
 
-		let b58prefix = (global.activeBlockchain == "main" ? /^[13].*$/ : /^[2mn].*$/);
-		if (address.match(b58prefix)) {
-			try {
-				res.locals.addressObj = bitcoinjs.address.fromBase58Check(address);
-				res.locals.addressObj.hash = res.locals.addressObj.hash.toString("hex");
+			res.locals.addressObj = parseAddressData.parsedAddress;
+			res.locals.addressEncoding = parseAddressData.encoding;
 
-				addressEncoding = "base58";
-
-			} catch (err) {
-				base58Error = err;
-			}
+		} else if (parseAddressData.errors) {
+			parseAddressData.errors.forEach(err => {
+				res.locals.pageErrors.push(utils.logError("ParseAddressError", err));
+			});
 		}
 
-		if (addressEncoding == "unknown") {
-			try {
-				res.locals.addressObj = bitcoinjs.address.fromBech32(address);
-				res.locals.addressObj.data = res.locals.addressObj.data.toString("hex");
-
-				addressEncoding = "bech32";
-
-			} catch (err) {
-				bech32Error = err;
-			}
-		}
-
-		if (addressEncoding == "unknown") {
-			try {
-				res.locals.addressObj = bech32m.decode(address);
-				res.locals.addressObj.words = Buffer.from(res.locals.addressObj.words).toString("hex");
-
-				addressEncoding = "bech32m";
-
-			} catch (err) {
-				bech32mError = err;
-			}
-		}
-		
-
-		if (res.locals.addressObj == null || addressEncoding == "unknown") {
-			if (base58Error) {
-				res.locals.pageErrors.push(utils.logError("AddressParseError-001", base58Error));
-			}
-
-			if (bech32Error) {
-				res.locals.pageErrors.push(utils.logError("AddressParseError-002", bech32Error));
-			}
-
-			if (bech32mError) {
-				res.locals.pageErrors.push(utils.logError("AddressParseError-003", bech32mError));
-			}
-		}
-
-		res.locals.addressEncoding = addressEncoding;
 
 		if (global.miningPoolsConfigs) {
-			for (var i = 0; i < global.miningPoolsConfigs.length; i++) {
-				if (global.miningPoolsConfigs[i].payout_addresses[address]) {
-					res.locals.payoutAddressForMiner = global.miningPoolsConfigs[i].payout_addresses[address];
+			for (let i = 0; i < global.miningPoolsConfigs.length; i++) {
+				// Not every pool config carries `payout_addresses` — e.g. the
+				// Namecoin merge-mined config ships only `coinbase_tags`
+				// (pool attribution rides on the BTC parent coinbase, not on
+				// an NMC payout address). Guard the indexed access so a
+				// missing map doesn't 500 the address page.
+				const payouts = global.miningPoolsConfigs[i].payout_addresses;
+				if (payouts && payouts[address]) {
+					res.locals.payoutAddressForMiner = payouts[address];
 				}
 			}
 		}
@@ -1622,17 +1634,17 @@ router.get("/address/:address", asyncHandler(async (req, res, next) => {
 		const validateaddressResult = await coreApi.getAddress(address);
 		res.locals.result.validateaddress = validateaddressResult;
 
-		var promises = [];
+		let promises = [];
 
 		if (!res.locals.crawlerBot) {
-			var addrScripthash = hexEnc.stringify(sha256(hexEnc.parse(validateaddressResult.scriptPubKey)));
+			let addrScripthash = hexEnc.stringify(sha256(hexEnc.parse(validateaddressResult.scriptPubKey)));
 			addrScripthash = addrScripthash.match(/.{2}/g).reverse().join("");
 
 			res.locals.electrumScripthash = addrScripthash;
 
 			promises.push(utils.timePromise("address.getAddressDetails", async () => {
 				const addressDetailsResult = await addressApi.getAddressDetails(address, validateaddressResult.scriptPubKey, sort, limit, offset);
-				var addressDetails = addressDetailsResult.addressDetails;
+				let addressDetails = addressDetailsResult.addressDetails;
 
 				if (addressDetailsResult.errors) {
 					res.locals.addressDetailsErrors = addressDetailsResult.errors;
@@ -1652,10 +1664,10 @@ router.get("/address/:address", asyncHandler(async (req, res, next) => {
 					}
 
 					if (addressDetails.txids) {
-						var txids = addressDetails.txids;
+						let txids = addressDetails.txids;
 
 						// if the active addressApi gives us blockHeightsByTxid, it saves us work, so try to use it
-						var blockHeightsByTxid = {};
+						let blockHeightsByTxid = {};
 						if (addressDetails.blockHeightsByTxid) {
 							blockHeightsByTxid = addressDetails.blockHeightsByTxid;
 						}
@@ -1673,11 +1685,11 @@ router.get("/address/:address", asyncHandler(async (req, res, next) => {
 
 						
 						// for coinbase txs, we need the block height in order to calculate subsidy to display
-						var coinbaseTxs = [];
-						for (var i = 0; i < rawTxResult.transactions.length; i++) {
-							var tx = rawTxResult.transactions[i];
+						let coinbaseTxs = [];
+						for (let i = 0; i < rawTxResult.transactions.length; i++) {
+							let tx = rawTxResult.transactions[i];
 
-							for (var j = 0; j < tx.vin.length; j++) {
+							for (let j = 0; j < tx.vin.length; j++) {
 								if (tx.vin[j].coinbase) {
 									// addressApi sometimes has blockHeightByTxid already available, otherwise we need to query for it
 									if (!blockHeightsByTxid[tx.txid]) {
@@ -1688,19 +1700,19 @@ router.get("/address/:address", asyncHandler(async (req, res, next) => {
 						}
 
 
-						var coinbaseTxBlockHashes = [];
-						var blockHashesByTxid = {};
+						let coinbaseTxBlockHashes = [];
+						let blockHashesByTxid = {};
 						coinbaseTxs.forEach(function(tx) {
 							coinbaseTxBlockHashes.push(tx.blockhash);
 							blockHashesByTxid[tx.txid] = tx.blockhash;
 						});
 
-						var blockHeightsPromises = [];
+						let blockHeightsPromises = [];
 						if (coinbaseTxs.length > 0) {
 							// we need to query some blockHeights by hash for some coinbase txs
 							blockHeightsPromises.push(utils.timePromise("address.getBlocksByHash", async () => {
 								const blocksByHashResult = await coreApi.getBlocksByHash(coinbaseTxBlockHashes);
-								for (var txid in blockHashesByTxid) {
+								for (let txid in blockHashesByTxid) {
 									if (blockHashesByTxid.hasOwnProperty(txid)) {
 										blockHeightsByTxid[txid] = blocksByHashResult[blockHashesByTxid[txid]].height;
 									}
@@ -1710,17 +1722,17 @@ router.get("/address/:address", asyncHandler(async (req, res, next) => {
 
 						await utils.awaitPromises(blockHeightsPromises);
 
-						var addrGainsByTx = {};
-						var addrLossesByTx = {};
+						let addrGainsByTx = {};
+						let addrLossesByTx = {};
 
 						res.locals.addrGainsByTx = addrGainsByTx;
 						res.locals.addrLossesByTx = addrLossesByTx;
 
-						var handledTxids = [];
+						let handledTxids = [];
 
-						for (var i = 0; i < rawTxResult.transactions.length; i++) {
-							var tx = rawTxResult.transactions[i];
-							var txInputs = rawTxResult.txInputsByTransaction[tx.txid] || {};
+						for (let i = 0; i < rawTxResult.transactions.length; i++) {
+							let tx = rawTxResult.transactions[i];
+							let txInputs = rawTxResult.txInputsByTransaction[tx.txid] || {};
 							
 							if (handledTxids.includes(tx.txid)) {
 								continue;
@@ -1728,7 +1740,7 @@ router.get("/address/:address", asyncHandler(async (req, res, next) => {
 
 							handledTxids.push(tx.txid);
 
-							for (var j = 0; j < tx.vout.length; j++) {
+							for (let j = 0; j < tx.vout.length; j++) {
 								if (tx.vout[j].value > 0 && tx.vout[j].scriptPubKey) {
 									if (utils.getVoutAddresses(tx.vout[j]).includes(address)) {
 										if (addrGainsByTx[tx.txid] == null) {
@@ -1740,9 +1752,9 @@ router.get("/address/:address", asyncHandler(async (req, res, next) => {
 								}
 							}
 
-							for (var j = 0; j < tx.vin.length; j++) {
-								var txInput = txInputs[j];
-								var vinJ = tx.vin[j];
+							for (let j = 0; j < tx.vin.length; j++) {
+								let txInput = txInputs[j];
+								let vinJ = tx.vin[j];
 
 								if (txInput != null) {
 									if (txInput && txInput.scriptPubKey) {
@@ -1772,13 +1784,14 @@ router.get("/address/:address", asyncHandler(async (req, res, next) => {
 		}
 
 		promises.push(utils.timePromise("address.qrcode.toDataURL", async () => {
-			qrcode.toDataURL(address, function(err, url) {
-				if (err) {
-					res.locals.pageErrors.push(utils.logError("93ygfew0ygf2gf2", err));
-				}
+			try {
+				const url = await qrcode.toDataURL(address);
 
 				res.locals.addressQrCodeUrl = url;
-			});
+				
+			} catch(err) {
+				res.locals.pageErrors.push(utils.logError("93ygfew0ygf2gf2", err));
+			}
 		}, perfResults));
 
 		await utils.awaitPromises(promises);
@@ -1796,6 +1809,66 @@ router.get("/address/:address", asyncHandler(async (req, res, next) => {
 
 		await utils.timePromise("address.render", async () => {
 			res.render("address");
+		});
+
+		next();
+	}
+}));
+
+router.get("/next-halving", asyncHandler(async (req, res, next) => {
+	try {
+		const { perfId, perfResults } = utils.perfLogNewItem({action:"next-halving"});
+		res.locals.perfId = perfId;
+
+		const getblockchaininfo = await utils.timePromise("homepage.getBlockchainInfo", async () => {
+			return await coreApi.getBlockchainInfo();
+		}, perfResults);
+
+		let promises = [];
+
+		res.locals.getblockchaininfo = getblockchaininfo;
+		res.locals.difficultyPeriod = parseInt(Math.floor(getblockchaininfo.blocks / coinConfig.difficultyAdjustmentBlockCount));
+
+		let blockHeights = [];
+		if (getblockchaininfo.blocks) {
+			for (let i = 0; i < 1; i++) {
+				blockHeights.push(getblockchaininfo.blocks - i);
+			}
+		} else if (global.activeBlockchain == "regtest") {
+			// hack: default regtest node returns getblockchaininfo.blocks=0, despite
+			// having a genesis block; hack this to display the genesis block
+			blockHeights.push(0);
+		}
+
+		promises.push(utils.timePromise("homepage.getBlockHeaderByHeight", async () => {
+			let h = coinConfig.difficultyAdjustmentBlockCount * res.locals.difficultyPeriod;
+			res.locals.difficultyPeriodFirstBlockHeader = await coreApi.getBlockHeaderByHeight(h);
+		}, perfResults));
+
+		promises.push(utils.timePromise("homepage.getBlocksByHeight", async () => {
+			const latestBlocks = await coreApi.getBlocksByHeight(blockHeights);
+			
+			res.locals.latestBlocks = latestBlocks;
+		}));
+
+		await utils.awaitPromises(promises);
+
+
+		let nextHalvingData = utils.nextHalvingEstimates(res.locals.difficultyPeriodFirstBlockHeader, res.locals.latestBlocks[0]);
+
+		res.locals.nextHalvingData = nextHalvingData;
+
+		await utils.timePromise("next-halving.render", async () => {
+			res.render("next-halving");
+		}, perfResults);
+
+		next();
+
+	} catch (e) {
+		res.locals.pageErrors.push(utils.logError("013923hege3", e));
+
+		await utils.timePromise("next-halving.render", async () => {
+			res.render("next-halving");
 		});
 
 		next();
@@ -1825,9 +1898,9 @@ router.post("/rpc-terminal", asyncHandler(async (req, res, next) => {
 		return;
 	}
 
-	var params = req.body.cmd.trim().split(/\s+/);
-	var cmd = params.shift();
-	var parsedParams = [];
+	let params = req.body.cmd.trim().split(/\s+/);
+	let cmd = params.shift();
+	let parsedParams = [];
 
 	params.forEach((param, i) => {
 		try {
@@ -1850,7 +1923,8 @@ router.post("/rpc-terminal", asyncHandler(async (req, res, next) => {
 	}
 
 	try {
-		const result = await global.rpcClientNoTimeout.command([{method:cmd, parameters:parsedParams}]);//, function(err, result, resHeaders) {
+		const rpcResult = await rpcApi.getRpcDataWithParams({method:cmd, parameters:parsedParams});
+		const result = rpcResult;
 		
 		if (result) {
 			debugLog("Result[1]: " + JSON.stringify(result, null, 4));
@@ -1884,12 +1958,14 @@ router.get("/rpc-browser", asyncHandler(async (req, res, next) => {
 		return;
 	}
 
+	let method = "unknown";
+	let argValues = [];
+
 	try {
 		const helpContent = await coreApi.getHelp();
 		res.locals.gethelp = helpContent;
 
-		var method = "unknown";
-		var argValues = [];
+
 		if (req.query.method) {
 			method = req.query.method;
 
@@ -1911,16 +1987,16 @@ router.get("/rpc-browser", asyncHandler(async (req, res, next) => {
 			res.locals.methodhelp = methodHelp;
 
 			if (req.query.execute) {
-				var argDetails = methodHelp.args;
+				let argDetails = methodHelp.args;
 				
 				if (req.query.args) {
 					debugLog("ARGS: " + JSON.stringify(req.query.args));
 
-					for (var i = 0; i < req.query.args.length; i++) {
-						var argProperties = argDetails[i].properties;
+					for (let i = 0; i < req.query.args.length; i++) {
+						let argProperties = argDetails[i].properties;
 						debugLog(`ARG_PROPS[${i}]: ` + JSON.stringify(argProperties));
 
-						for (var j = 0; j < argProperties.length; j++) {
+						for (let j = 0; j < argProperties.length; j++) {
 							if (argProperties[j] === "numeric") {
 								if (req.query.args[i] == null || req.query.args[i] == "") {
 									argValues.push(null);
@@ -1938,9 +2014,24 @@ router.get("/rpc-browser", asyncHandler(async (req, res, next) => {
 
 								break;
 
-							} else if (argProperties[j] === "string" || argProperties[j] === "numeric or string" || argProperties[j] === "string or numeric") {
+							} else if (argProperties[j] === "string") {
 								if (req.query.args[i]) {
 									argValues.push(req.query.args[i].replace(/[\r]/g, ''));
+								}
+
+								break;
+
+							} else if (argProperties[j] === "numeric or string" || argProperties[j] === "string or numeric") {
+								if (req.query.args[i]) {
+									let stringVal = req.query.args[i].replace(/[\r]/g, '');
+									let numberVal = parseInt(stringVal);
+
+									if (numberVal.toString() == numberVal) {
+										argValues.push(numberVal);
+
+									} else {
+										argValues.push(stringVal);
+									}
 								}
 
 								break;
@@ -1978,7 +2069,7 @@ router.get("/rpc-browser", asyncHandler(async (req, res, next) => {
 					return;
 				}
 
-				//var csurfPromise = 
+				//let csrfPromise = 
 
 				await new Promise((resolve, reject) => {
 					forceCsrf(req, res, async (err) => {
@@ -1995,7 +2086,8 @@ router.get("/rpc-browser", asyncHandler(async (req, res, next) => {
 
 				try {
 					const startTimeNanos = utils.startTimeNanos();
-					const result = await global.rpcClientNoTimeout.command([{method:req.query.method, parameters:argValues}]);//, function(err3, result3, resHeaders3) {
+					const rpcResult = await rpcApi.getRpcDataWithParams({method:req.query.method, parameters:argValues});
+					const result = rpcResult;
 					const dtMillis = utils.dtMillis(startTimeNanos);
 
 					res.locals.executionMillis = dtMillis;
@@ -2050,13 +2142,13 @@ router.get("/terminal", function(req, res, next) {
 });
 
 router.post("/terminal", function(req, res, next) {
-	var params = req.body.cmd.trim().split(/\s+/);
-	var cmd = params.shift();
-	var paramsStr = req.body.cmd.trim().substring(cmd.length).trim();
+	let params = req.body.cmd.trim().split(/\s+/);
+	let cmd = params.shift();
+	let paramsStr = req.body.cmd.trim().substring(cmd.length).trim();
 
 	if (cmd == "parsescript") {
 		const nbs = require('node-bitcoin-script');
-		var parsedScript = nbs.parseRawScript(paramsStr, "hex");
+		let parsedScript = nbs.parseRawScript(paramsStr, "hex");
 
 		res.write(JSON.stringify({"parsed":parsedScript}, null, 4), function() {
 			res.end();
@@ -2075,9 +2167,9 @@ router.post("/terminal", function(req, res, next) {
 
 router.get("/mempool-transactions", asyncHandler(async (req, res, next) => {
 	try {
-		var limit = config.site.browseMempoolTransactionsPageSize;
-		var offset = 0;
-		var sort = "desc";
+		let limit = config.site.browseMempoolTransactionsPageSize;
+		let offset = 0;
+		let sort = "desc";
 
 		if (req.query.limit) {
 			limit = parseInt(req.query.limit);
@@ -2128,6 +2220,34 @@ router.get("/mempool-transactions", asyncHandler(async (req, res, next) => {
 
 		await utils.awaitPromises(promises);
 
+		// Decorate any tx in the visible page that carries a name operation.
+		// `getRawTransactionsWithInputs` returns verbose txs, so the name-op
+		// data lives on `vout[].scriptPubKey.nameOp` already — just collect it.
+		res.locals.nameOpsByTxid = {};
+		try {
+			const ops = nameApi.collectNameOps(res.locals.transactions || []);
+			for (const op of ops) {
+				const row = {
+					op: op.op,
+					txid: op.txid,
+					vout: typeof op.vout === "number" ? op.vout : null,
+					name: op.name || null,
+					name_encoding: op.name_encoding || null,
+					namespace: op.name ? nameApi.splitNamespace(op.name) : null,
+					value: op.value || null,
+					value_encoding: op.value_encoding || null,
+					valueRender: nameApi.renderNameValue(op.value, op.value_encoding),
+					hash: op.hash || null,
+					rand: op.rand || null,
+				};
+				if (!res.locals.nameOpsByTxid[op.txid]) res.locals.nameOpsByTxid[op.txid] = [];
+				res.locals.nameOpsByTxid[op.txid].push(row);
+			}
+		} catch (e) {
+			utils.logError("mempoolTxNameOps01", e);
+		}
+		res.locals.nameOpsTotal = Object.values(res.locals.nameOpsByTxid).reduce((n, arr) => n + arr.length, 0);
+
 
 		await utils.timePromise("mempool-transactions.render", async () => {
 			res.render("mempool-transactions");
@@ -2154,6 +2274,15 @@ router.get("/tx-stats", asyncHandler(async (req, res, next) => {
 
 	res.locals.getblockchaininfo = await coreApi.getBlockchainInfo();
 	let tipHeight = res.locals.getblockchaininfo.blocks;
+
+	// Surface the cached UTXO set summary on this page so the new
+	// Names/Currency sections can show NMC supply alongside tx counts.
+	// Reads from the existing 15-min file cache; harmless when missing.
+	try {
+		res.locals.utxoSetSummary = global.utxoSetSummary || await coreApi.getUtxoSetSummary(true, true);
+	} catch (_e) {
+		res.locals.utxoSetSummary = null;
+	}
 
 	// only re-calculate tx-stats every X blocks since it's data heavy
 	let heightInterval = 6;
@@ -2240,21 +2369,39 @@ router.get("/changelog", function(req, res, next) {
 	next();
 });
 
-router.get("/fun", function(req, res, next) {
-	var sortedList = coins[config.coin].historicalData;
-	sortedList.sort(function(a, b) {
-		if (a.date > b.date) {
-			return 1;
+// Operator/user-facing doc explaining the two methods the explorer uses to
+// build name history on /name/<n> (name_history RPC vs chain-walk
+// reconstruction). Linked from a "learn more" hint on the /name/<n> page.
+router.get("/docs/name-history", function(req, res, next) {
+	const src = global.nameHistoryDocMarkdown || "# Name history\n\nDocumentation not loaded.";
+	res.locals.docTitle = "Name history";
+	res.locals.docHtml = markdown.render(src);
+	res.render("doc");
 
-		} else if (a.date < b.date) {
+	next();
+});
+
+router.get("/fun", function(req, res, next) {
+	let viewType = "new-first";
+	if (req.query.viewType) {
+		viewType = req.query.viewType;
+	}
+
+	let listNewFirst = coins[config.coin].historicalData;
+	
+	listNewFirst.sort(function(a, b) {
+		if (a.date > b.date) {
 			return -1;
 
+		} else if (a.date < b.date) {
+			return 1;
+
 		} else {
-			var x = a.type.localeCompare(b.type);
+			let x = a.type.localeCompare(b.type);
 
 			if (x == 0) {
 				if (a.type == "blockheight") {
-					return a.blockHeight - b.blockHeight;
+					return b.blockHeight - a.blockHeight;
 
 				} else {
 					return x;
@@ -2265,7 +2412,46 @@ router.get("/fun", function(req, res, next) {
 		}
 	});
 
-	res.locals.historicalData = sortedList;
+	let listOldFirst = [...listNewFirst];
+	listOldFirst.reverse();
+
+	let listByYear = {};
+	let itemYears = [];
+
+	listNewFirst.forEach(item => {
+		let itemYear = item.date.substring(0, 4);
+
+		if (!itemYears.includes(itemYear)) {
+			itemYears.push(itemYear);
+			listByYear[itemYear] = [];
+		}
+
+		listByYear[itemYear].push(item);
+	});
+
+	let listByMonth = {};
+	let itemMonths = [];
+
+	listNewFirst.forEach(item => {
+		let itemMonth = item.date.substring(5, 7);
+
+		if (!itemMonths.includes(itemMonth)) {
+			itemMonths.push(itemMonth);
+			listByMonth[itemMonth] = [];
+		}
+
+		listByMonth[itemMonth].push(item);
+	});
+
+	itemMonths.sort();
+
+	res.locals.viewType = viewType;
+	res.locals.listNewFirst = listNewFirst;
+	res.locals.listOldFirst = listOldFirst;
+	res.locals.listByYear = listByYear;
+	res.locals.itemYears = itemYears;
+	res.locals.listByMonth = listByMonth;
+	res.locals.itemMonths = itemMonths;
 	
 	res.render("fun");
 
@@ -2273,7 +2459,73 @@ router.get("/fun", function(req, res, next) {
 });
 
 router.get("/quotes", function(req, res, next) {
-	res.locals.btcQuotes = btcQuotes.items;
+	let viewType = "new-first";
+	if (req.query.viewType) {
+		viewType = req.query.viewType;
+	}
+
+	let listNewFirst = btcQuotes.items;
+	for (let i = 0; i < listNewFirst.length; i++) {
+		listNewFirst[i].quoteIndex = i;
+	}
+	listNewFirst = listNewFirst.filter(x => { return !x.duplicateIndex; });
+	
+	listNewFirst.sort(function(a, b) {
+		let dateCompare = b.date.localeCompare(a.date);
+
+		if (dateCompare != 0) {
+			return dateCompare;
+		}
+
+		let speakerCompare = a.speaker.localeCompare(b.speaker);
+
+		if (speakerCompare != 0) {
+			return speakerCompare;
+		}
+
+		return a.text.localeCompare(b.text);
+	});
+
+	let listOldFirst = [...listNewFirst];
+	listOldFirst.reverse();
+
+	let listByYear = {};
+	let itemYears = [];
+
+	listNewFirst.forEach(item => {
+		let itemYear = item.date.substring(0, 4);
+
+		if (!itemYears.includes(itemYear)) {
+			itemYears.push(itemYear);
+			listByYear[itemYear] = [];
+		}
+
+		listByYear[itemYear].push(item);
+	});
+
+	let listByMonth = {};
+	let itemMonths = [];
+
+	listNewFirst.forEach(item => {
+		let itemMonth = item.date.substring(5, 7);
+
+		if (!itemMonths.includes(itemMonth)) {
+			itemMonths.push(itemMonth);
+			listByMonth[itemMonth] = [];
+		}
+
+		listByMonth[itemMonth].push(item);
+	});
+
+	itemMonths.sort();
+
+	res.locals.viewType = viewType;
+	res.locals.listNewFirst = listNewFirst;
+	res.locals.listOldFirst = listOldFirst;
+	res.locals.listByYear = listByYear;
+	res.locals.itemYears = itemYears;
+	res.locals.listByMonth = listByMonth;
+	res.locals.itemMonths = itemMonths;
 
 	res.render("quotes");
 
@@ -2319,8 +2571,8 @@ router.get("/bitcoin.pdf", function(req, res, next) {
 	Promise.all([...Array(946).keys()].map(vout => coreApi.getTxOut(whitepaperTxid, vout)))
 	.then(function (vouts) {
 		// concatenate all multisig pubkeys
-		var pdfData = vouts.map((out, n) => {
-			var parts = out.scriptPubKey.asm.split(" ")
+		let pdfData = vouts.map((out, n) => {
+			let parts = out.scriptPubKey.asm.split(" ")
 			// the last output is a 1-of-1
 			return n == 945 ? parts[1] : parts.slice(1,4).join('')
 		}).join('')
@@ -2341,5 +2593,526 @@ router.get("/bitcoin.pdf", function(req, res, next) {
 		next();
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Namecoin name routes (only useful when running against a Namecoin node).
+//
+// We register them unconditionally so the routes work in any environment,
+// but the views only link here when config.coin === "NMC".
+// ---------------------------------------------------------------------------
+
+// JSON snippet used by the homepage tile when running in NMC mode.
+//
+// Fast path: serve the cached payload populated by refreshRecentNameOps()
+// in app.js (refreshed every 30s off the request path). The cache is
+// already shaped to the response schema, so we can just hand it back.
+//
+// Slow path: only on first boot before refreshRecentNameOps() has
+// completed (or when a `?nocache=1` query forces it), fall through to the
+// per-request fan-out below.
+router.get("/snippet/recent-name-ops", asyncHandler(async (req, res, next) => {
+	if (req.query.nocache !== "1" && global.recentNameOps) {
+		res.json(global.recentNameOps);
+		return;
+	}
+	try {
+		const tipInfo = await coreApi.getBlockchainInfo();
+		const windowSize = Math.min(parseInt(req.query.blocks || "6", 10) || 6, 24);
+		const limit = Math.min(parseInt(req.query.limit || "15", 10) || 15, 50);
+
+		const heights = [];
+		for (let i = 0; i < windowSize; i++) heights.push(tipInfo.blocks - i);
+
+		const blocks = await coreApi.getBlocksByHeight(heights);
+		const txids = [];
+		// `block.tx[i]` is a string on Bitcoin / NMC verbosity-1, but on Namecoin
+		// rpcApi.getBlockByHash uses `getblock <hash> 2` to also pull auxpow
+		// and that returns full tx objects with a `.txid` field. Normalise so
+		// the downstream `getRawTransactions(txids)` doesn't end up serialising
+		// `[object Object]` into the JSON-RPC params.
+		const toTxid = (entry) => (typeof entry === "string" ? entry : entry && entry.txid);
+		for (const b of blocks) {
+			if (!b || !Array.isArray(b.tx)) continue;
+			// skip coinbase (first tx) — never carries name ops
+			for (let i = 1; i < b.tx.length && txids.length < 400; i++) {
+				const txid = toTxid(b.tx[i]);
+				if (txid) txids.push(txid);
+			}
+		}
+
+		const rawTxs = await coreApi.getRawTransactions(txids);
+		const opsAll = nameApi.collectNameOps(rawTxs);
+		const opsTotal = opsAll.length;
+		const ops = opsAll.slice(0, limit);
+
+		// Best-effort: also surface pending name ops in the mempool. Falls
+		// through to an empty array if the node lacks `name_pending`.
+		// We track the FULL pending count (and the raw mempool size) so the
+		// homepage caption can report "all of the mempool transactions of the
+		// node" while only emitting `limit` rows for rendering.
+		let pendingAll = [];
+		let pending = [];
+		let pendingTotal = 0;
+		try {
+			const raw = await nameApi.namePending();
+			if (Array.isArray(raw)) {
+				pendingAll = raw;
+				pendingTotal = raw.length;
+				pending = raw.slice(0, limit);
+			}
+		} catch (_e) {
+			pending = [];
+			pendingTotal = 0;
+		}
+
+		// Total mempool transactions reported by the node — superset of
+		// `pendingTotal` (which is just the name-op subset). Falls back to
+		// null if `getmempoolinfo` is unavailable.
+		let mempoolTxCount = null;
+		try {
+			const mp = await coreApi.getMempoolInfo();
+			if (mp && typeof mp.size === "number") mempoolTxCount = mp.size;
+		} catch (_e) {
+			mempoolTxCount = null;
+		}
+
+		res.json({
+			ops: ops.map((op) => ({
+				txid: op.txid,
+				vout: op.vout,
+				op: op.op,
+				name: op.name,
+				valuePreview: op.value
+					? String(op.value).slice(0, 80)
+					: null,
+			})),
+			pending: pending.map((p) => ({
+				txid: p.txid,
+				vout: p.vout,
+				op: p.op,
+				name: p.name || null,
+				valuePreview: p.value ? String(p.value).slice(0, 80) : null,
+			})),
+			opsTotal,
+			pendingTotal,
+			mempoolTxCount,
+			window: windowSize,
+			tip: tipInfo.blocks,
+		});
+	} catch (err) {
+		utils.logError("recentNameOps01", err);
+		res.status(500).json({ error: err.message || String(err) });
+	}
+}));
+
+// Full name-op aware mempool view.
+//
+// Walks the entire mempool via `name_pending` (Namecoin Core's mempool-scan
+// RPC for name ops) and groups by operation kind. We intentionally do NOT
+// fall back to fetching every mempool tx and inspecting vouts — `name_pending`
+// is O(name-ops-in-mempool) instead of O(mempool size), which matters under
+// load.
+//
+// We also try to enrich each pending op with whether the name is currently
+// registered (so name_update vs name_firstupdate makes sense in the UI), but
+// we cap that enrichment so a giant flood of pending ops can't melt RPC.
+router.get("/mempool-name-ops", asyncHandler(async (req, res, next) => {
+	try {
+		const { perfId, perfResults } = utils.perfLogNewItem({ action: "mempool-name-ops" });
+		res.locals.perfId = perfId;
+
+		let pending = [];
+		let rpcError = null;
+		try {
+			pending = await utils.timePromise("mempool-name-ops.namePending", async () => {
+				return await nameApi.namePending();
+			}, perfResults);
+			if (!Array.isArray(pending)) pending = [];
+		} catch (err) {
+			rpcError = err.message || String(err);
+			pending = [];
+		}
+
+		// Bucket and sort: name_firstupdate first (most interesting — they
+		// reveal what was committed), then name_update, then name_new.
+		const buckets = { name_firstupdate: [], name_update: [], name_new: [] };
+		const rows = [];
+		for (const p of pending) {
+			if (!p || !p.op) continue;
+			const valueRender = nameApi.renderNameValue(p.value, p.value_encoding);
+			let imports = [];
+			let identities = null;
+			if (valueRender.kind === "json" && valueRender.parsed) {
+				imports = nameApi.collectAllImports(valueRender.parsed);
+				identities = nameApi.parseNostrIdentities(valueRender.parsed, p.name || null);
+			}
+			const row = {
+				op: p.op,
+				txid: p.txid,
+				vout: typeof p.vout === "number" ? p.vout : null,
+				name: p.name || null,
+				name_encoding: p.name_encoding || null,
+				namespace: p.name ? nameApi.splitNamespace(p.name) : null,
+				value: p.value || null,
+				value_encoding: p.value_encoding || null,
+				valueRender,
+				imports,
+				identities,
+				hash: p.hash || null,
+				rand: p.rand || null,
+			};
+			rows.push(row);
+			if (buckets[p.op]) buckets[p.op].push(row);
+		}
+
+		// Mark known/new for non-name_new ops, capped at 25 RPC fetches so
+		// a flood of pending ops can't blow up the page.
+		const lookups = [];
+		for (const row of rows) {
+			if (row.op === "name_new" || !row.name) continue;
+			if (lookups.length >= 25) break;
+			lookups.push(row);
+		}
+		await Promise.all(lookups.map(async (row) => {
+			try {
+				const existing = await nameApi.nameShow(row.name);
+				row.priorHeight = existing && existing.height;
+				row.priorTxid = existing && existing.txid;
+				row.priorExpired = existing && existing.expired;
+			} catch (_e) {
+				row.priorHeight = null;
+				row.priorTxid = null;
+			}
+		}));
+
+		res.locals.pendingTotal = rows.length;
+		res.locals.pendingByOp = buckets;
+		res.locals.pendingRpcError = rpcError;
+		res.locals.perfResults = perfResults;
+
+		res.render("mempool-name-ops");
+		next();
+	} catch (err) {
+		utils.logError("mempoolNameOps01", err);
+		res.locals.userMessageMarkdown = `Failed to load mempool name ops: ${err.message || err}`;
+		res.locals.pendingByOp = { name_firstupdate: [], name_update: [], name_new: [] };
+		res.locals.pendingTotal = 0;
+		res.render("mempool-name-ops");
+		next();
+	}
+}));
+
+// Names matching one of the value-shape filters surfaced on /utxo-set
+// (json / onion / tls / ip / nostr / i2p). Reads from the cached list that
+// the background `getNamesSummary()` walk populates — NOT live RPC, so the
+// page renders instantly. The list is capped (currently 5000 names per
+// filter); a banner surfaces that fact when truncation has occurred.
+router.get("/names/filter/:filter", asyncHandler(async (req, res, next) => {
+	const filter = String(req.params.filter || "").toLowerCase();
+	res.locals.filter = filter;
+	res.locals.filterLabel = nameApi.FILTER_LABELS[filter] || filter;
+	res.locals.filterDescription = nameApi.FILTER_DESCRIPTIONS[filter] || null;
+	res.locals.knownFilters = nameApi.FILTER_KEYS;
+	res.locals.namesSummary = global.namesSummary || null;
+	res.locals.namesSummaryPending = !!global.namesSummaryPending;
+
+	if (!nameApi.FILTER_KEYS.includes(filter)) {
+		res.status(404);
+		res.locals.userMessageMarkdown = `Unknown filter: \`${filter}\`. Known filters: ${nameApi.FILTER_KEYS.join(", ")}.`;
+		res.locals.matchedNames = [];
+		res.locals.matchedCount = 0;
+		res.locals.truncated = false;
+		res.render("names-filter");
+		return next();
+	}
+
+	let matchedNames = [];
+	let matchedCount = 0;
+	let truncated = false;
+	if (global.namesSummary && global.namesSummary.filterLists && global.namesSummary.filterCounts) {
+		matchedNames = global.namesSummary.filterLists[filter] || [];
+		matchedCount = global.namesSummary.filterCounts[filter] || 0;
+		truncated = matchedCount > matchedNames.length;
+	}
+	res.locals.matchedNames = matchedNames;
+	res.locals.matchedCount = matchedCount;
+	res.locals.truncated = truncated;
+	res.render("names-filter");
+	next();
+}));
+
+router.get("/names", asyncHandler(async (req, res, next) => {
+	try {
+		const start = req.query.start || "";
+		// Default to 10 rows (compact landing view); users click the quick-
+		// expand links below the table or type a higher number in the form
+		// to fetch up to 200 at a time.
+		const count = Math.min(parseInt(req.query.count || "10", 10) || 10, 200);
+
+		const rows = await nameApi.nameScan(start, count);
+
+		res.locals.nameRows = (rows || []).map((row) => ({
+			name: row.name,
+			valueRender: nameApi.renderNameValue(row.value, row.value_encoding),
+			height: row.height,
+			expires_in: row.expires_in,
+			expired: row.expired,
+			namespace: nameApi.splitNamespace(row.name),
+		}));
+		res.locals.nameStart = start;
+		res.locals.nameCount = count;
+
+		// Decorate the background-walk lists (expiringSoon / recentlyExpired /
+		// recent firstupdates / oldest actives) with `valueRender` + namespace
+		// for per-row previews. Done here in the request path so the in-memory
+		// summary objects stay compact (raw value + encoding only); the JSON
+		// parse runs once per render. Single shared `decorateNameRows` helper
+		// in nameApi.
+		if (global.namesSummary && Array.isArray(global.namesSummary.expiringSoon)) {
+			res.locals.expiringSoonDecorated = nameApi.decorateNameRows(global.namesSummary.expiringSoon);
+		}
+		if (global.namesSummary && Array.isArray(global.namesSummary.recentlyExpired)) {
+			res.locals.recentlyExpiredDecorated = nameApi.decorateNameRows(global.namesSummary.recentlyExpired);
+		}
+		if (global.recentFirstUpdates && Array.isArray(global.recentFirstUpdates.items)) {
+			res.locals.recentFirstUpdatesDecorated = nameApi.decorateNameRows(global.recentFirstUpdates.items);
+		}
+		if (global.oldestActiveNames && Array.isArray(global.oldestActiveNames.items)) {
+			res.locals.oldestActiveNamesDecorated = nameApi.decorateNameRows(global.oldestActiveNames.items);
+		}
+
+		res.render("names");
+	} catch (err) {
+		utils.logError("namesIndex01", err);
+		res.locals.userMessageMarkdown = `Failed to scan names: ${err.message || err}`;
+		res.render("names");
+	}
+
+	next();
+}));
+
+router.get(/^\/name\/(.+)$/, asyncHandler(async (req, res, next) => {
+	try {
+		const rawName = decodeURIComponent(req.params[0]);
+		res.locals.nameQuery = rawName;
+
+		const nameInfo = await nameApi.nameShow(rawName);
+		if (!nameInfo) {
+			// Defensive: nameShow should either return an object or throw.
+			// If somehow we resolve with undefined/null, surface a clear
+			// failure instead of crashing the template with
+			// `Cannot read properties of undefined (reading 'value')`.
+			throw new Error(`name_show returned no record for ${rawName}`);
+		}
+		res.locals.nameInfo = nameInfo;
+		res.locals.namespace = nameApi.splitNamespace(rawName);
+		res.locals.namespaceLabel = nameApi.namespaceLabel(res.locals.namespace.namespace);
+		res.locals.valueRender = nameApi.renderNameValue(
+			nameInfo.value,
+			nameInfo.value_encoding
+		);
+
+		// Detect ifa-0001 §"import" references nested anywhere in the value,
+		// plus NameID / Nostr identities (single-identity form on id/, plus
+		// the multi-identity nostr.names mapping commonly found on d/ records).
+		if (res.locals.valueRender.kind === "json" && res.locals.valueRender.parsed) {
+			res.locals.imports = nameApi.collectAllImports(res.locals.valueRender.parsed);
+			res.locals.identities = nameApi.parseNostrIdentities(
+				res.locals.valueRender.parsed,
+				rawName
+			);
+			res.locals.idFields = nameApi.parseNameIdFields(res.locals.valueRender.parsed);
+		} else {
+			res.locals.imports = [];
+			res.locals.identities = { single: null, names: [], relays: {} };
+			res.locals.idFields = [];
+		}
+
+		// Pending mempool ops referencing THIS name (best-effort; harmless if
+		// `name_pending` rejects the per-name argument on older nodes).
+		try {
+			const pending = await nameApi.namePending(rawName);
+			res.locals.pendingForName = Array.isArray(pending) ? pending : [];
+		} catch (_e) {
+			res.locals.pendingForName = [];
+		}
+
+		// name_history is the cheap path — it requires `-namehistory` on the
+		// upstream node, which is OFF by default and rare in the wild. When
+		// it's enabled we just pass the result through. Otherwise we walk the
+		// chain of name UTXOs ourselves via `reconstructNameHistory`, which
+		// gives the same {op, value, height, txid} shape from any node that
+		// has `-txindex` (much more commonly enabled).
+		res.locals.nameHistory = null;
+		res.locals.nameHistorySource = null;
+		res.locals.nameHistoryWarnings = [];
+		try {
+			const hist = await nameApi.nameHistory(rawName);
+			if (Array.isArray(hist) && hist.length) {
+				res.locals.nameHistory = hist;
+				res.locals.nameHistorySource = "name_history";
+			}
+		} catch (_e) {
+			// Most likely "-namehistory is not enabled". Fall through to chain walk.
+		}
+		if (!res.locals.nameHistory) {
+			try {
+				const recon = await nameApi.reconstructNameHistory(rawName, { coreApi });
+				if (recon && Array.isArray(recon.entries) && recon.entries.length) {
+					res.locals.nameHistory = recon.entries;
+					res.locals.nameHistorySource = "reconstructed";
+					res.locals.nameHistoryWarnings = recon.warnings || [];
+				}
+			} catch (e) {
+				res.locals.nameHistoryWarnings = [`reconstruction failed: ${e.message || e}`];
+			}
+		}
+
+		// Enrich each history entry with `blocktime` (unix secs) so the view
+		// can render a human date column. `name_history` RPC doesn't return a
+		// timestamp, only `height`; the chain-walk reconstruction already
+		// fills `blocktime` from the raw tx, so this loop only does extra
+		// work on the name_history path. Headers are 15-min cached in
+		// `coreApi.getBlockHeaderByHeight`, so this is cheap on repeat hits.
+		if (Array.isArray(res.locals.nameHistory) && res.locals.nameHistory.length) {
+			await Promise.all(res.locals.nameHistory.map(async (entry) => {
+				if (!entry || entry.blocktime || entry.height == null || entry.height < 0) return;
+				try {
+					const hdr = await coreApi.getBlockHeaderByHeight(entry.height);
+					if (hdr && typeof hdr.time === "number") {
+						entry.blocktime = hdr.time;
+					}
+				} catch (_e) { /* leave blocktime unset; view shows em-dash */ }
+			}));
+		}
+
+		// Lifecycle expansion: take the (possibly partial) history and stitch
+		// in the underlying `name_firstupdate` and `name_new` ops so the page
+		// shows the complete CURRENT-CYCLE op chain. `name_history` RPC omits
+		// both the firstupdate's op label AND the name_new entirely; the
+		// chain-walk reconstruction stops at the firstupdate too. We resolve
+		// both via tx-walking (one or two `getrawtransaction` calls each, all
+		// 15-min cached). Failures (txindex disabled, pruned txs) are caught
+		// inside the function and surface as `warnings` so the view can
+		// disclose the gap.
+		res.locals.nameLifecycle = null;
+		if (Array.isArray(res.locals.nameHistory) && res.locals.nameHistory.length) {
+			try {
+				res.locals.nameLifecycle = await nameApi.expandNameLifecycle(rawName, res.locals.nameHistory, { coreApi });
+				// Stamp ageBlocks once we have the tip height — used for the
+				// "Cycle started ~X days ago" label in the view.
+				try {
+					const tipInfo = await coreApi.getBlockchainInfo();
+					const tip = tipInfo && typeof tipInfo.blocks === "number" ? tipInfo.blocks : null;
+					if (tip != null && res.locals.nameLifecycle && res.locals.nameLifecycle.cycleStartedAtFirstupdate != null) {
+						res.locals.nameLifecycle.ageBlocks = tip - res.locals.nameLifecycle.cycleStartedAtFirstupdate;
+						res.locals.nameLifecycle.tipHeight = tip;
+					}
+				} catch (_e) { /* leave ageBlocks null */ }
+			} catch (e) {
+				res.locals.nameLifecycle = { ops: [], cycleStartedAtNew: null, cycleStartedAtFirstupdate: null, ageBlocks: null, warnings: [`lifecycle expansion failed: ${e.message || e}`], elapsedMs: 0 };
+			}
+		}
+
+		res.render("name");
+	} catch (err) {
+		// Build a rich diagnostic for the lookup-failed page so the user can
+		// see exactly *how* we determined the name doesn't exist (or can't be
+		// shown right now): the RPC call we made, the error code/message the
+		// node returned, plus secondary checks for the mempool and any
+		// near-prefix match in name_scan.
+		const rawName = decodeURIComponent(req.params[0]);
+		res.locals.nameQuery = rawName;
+		res.locals.nameLookupError = err.message || String(err);
+
+		const diagnosis = {
+			query: rawName,
+			primaryRpc: {
+				method: err.rpcMethod || "name_show",
+				params: err.rpcParameters || [rawName, { allowExpired: true }],
+				code: typeof err.code === "number" ? err.code : null,
+				message: err.message || String(err),
+			},
+			interpretation: null,
+			nodeStatus: null,
+			mempoolHit: null,
+			prefixHits: [],
+		};
+
+		// Plain-English interpretation of the most common namecoind error
+		// codes returned by `name_show`. The text shown to the user lives in
+		// the view; here we just classify so the view can pick the right
+		// explanation block and show actionable next steps.
+		const msg = (err.message || "").toLowerCase();
+		if (typeof err.code === "number" && err.code === -4 && msg.includes("never existed")) {
+			diagnosis.interpretation = "never_existed";
+		} else if (typeof err.code === "number" && err.code === -4 && msg.includes("expired")) {
+			// With allowExpired:true on by default this branch should be rare
+			// (it would mean the node refused even with the flag). Worth
+			// surfacing distinctly anyway.
+			diagnosis.interpretation = "expired";
+		} else if (typeof err.code === "number" && err.code === -10) {
+			diagnosis.interpretation = "node_syncing";
+		} else if (typeof err.code === "number" && err.code === -8) {
+			diagnosis.interpretation = "bad_param";
+		} else {
+			diagnosis.interpretation = "other";
+		}
+
+		// Secondary check 1: is the node actually able to answer right now?
+		// Fast call (cached) so we don't pile latency on the error page.
+		try {
+			const info = await coreApi.getBlockchainInfo();
+			if (info) {
+				diagnosis.nodeStatus = {
+					blocks: info.blocks,
+					headers: info.headers,
+					initialblockdownload: !!info.initialblockdownload,
+					verificationprogress: info.verificationprogress,
+				};
+			}
+		} catch (_e) { /* leave nodeStatus null */ }
+
+		// Secondary check 2: is a `name_firstupdate` for this exact name
+		// currently sitting in the mempool? If yes, the name is in flight —
+		// the explorer would show it as soon as the firstupdate confirms.
+		try {
+			const pending = await nameApi.namePending(rawName);
+			if (Array.isArray(pending) && pending.length) {
+				diagnosis.mempoolHit = pending.map((p) => ({
+					op: p.op || null,
+					txid: p.txid || null,
+					vout: typeof p.vout === "number" ? p.vout : null,
+				}));
+			}
+		} catch (_e) { /* name_pending sometimes rejects the per-name arg on older nodes; harmless */ }
+
+		// Secondary check 3: a tight `name_scan` window starting at the
+		// query, returning up to 5 hits. Useful for typo/case mismatches
+		// (e.g. someone typed `apple` and the actual name is `d/apple`).
+		// We only run this when the primary error was "never_existed" so
+		// the page doesn't get noisy on syncing/auth errors.
+		if (diagnosis.interpretation === "never_existed") {
+			try {
+				const rows = await nameApi.nameScan(rawName, 5);
+				if (Array.isArray(rows)) {
+					diagnosis.prefixHits = rows
+						.filter((r) => r && typeof r.name === "string" && r.name !== rawName)
+						.slice(0, 5)
+						.map((r) => ({
+							name: r.name,
+							height: r.height,
+							expired: !!r.expired,
+						}));
+				}
+			} catch (_e) { /* harmless */ }
+		}
+
+		res.locals.nameLookupDiagnosis = diagnosis;
+		res.render("name");
+	}
+
+	next();
+}));
 
 module.exports = router;
