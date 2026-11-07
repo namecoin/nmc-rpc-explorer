@@ -159,18 +159,18 @@ function getUtxoSetSummary(useCoinStatsIndexIfAvailable=true) {
 function getRawMempool() {
 	return new Promise(function(resolve, reject) {
 		getRpcDataWithParams({method:"getrawmempool", parameters:[false]}).then(function(txids) {
-			var promises = [];
+			let promises = [];
 
-			for (var i = 0; i < txids.length; i++) {
-				var txid = txids[i];
+			for (let i = 0; i < txids.length; i++) {
+				let txid = txids[i];
 
 				promises.push(getRawMempoolEntry(txid));
 			}
 
 			Promise.all(promises).then(function(results) {
-				var finalResult = {};
+				let finalResult = {};
 
-				for (var i = 0; i < results.length; i++) {
+				for (let i = 0; i < results.length; i++) {
 					if (results[i] != null) {
 						finalResult[results[i].txid] = results[i];
 					}
@@ -249,12 +249,19 @@ function getBlockHashByHeight(blockHeight) {
 }
 
 function getBlockByHash(blockHash) {
-	return getRpcDataWithParams({method:"getblock", parameters:[blockHash]})
+	// On Namecoin we want the `auxpow` blob attached to the block so
+	// identifyMiner() can scan the parent Bitcoin coinbase tag (NMC is
+	// merge-mined, so the pool tag lives in the AuxPow's parent coinbase,
+	// not the NMC coinbase). `getblock <hash> 2` returns full decoded txs
+	// plus the auxpow blob; verbosity 1 (the default) does not.
+	const getblockParams = (config.coin === "NMC") ? [blockHash, 2] : [blockHash];
+	return getRpcDataWithParams({method:"getblock", parameters:getblockParams})
 		.then(function(block) {
-			return getRawTransaction(block.tx[0], blockHash).then(function(tx) {
+			return getRawTransaction((typeof block.tx[0] === "string" ? block.tx[0] : block.tx[0].txid), blockHash).then(function(tx) {
 				block.coinbaseTx = tx;
 				block.totalFees = utils.getBlockTotalFeesFromCoinbaseTxAndBlockHeight(tx, block.height);
-				block.miner = utils.identifyMiner(tx, block.height);
+				// The merge-mining-aware identifier looks at block.auxpow when present.
+				block.miner = utils.identifyMiner(tx, block.height, block);
 				return block;
 			})
 		}).catch(function(err) {
@@ -277,7 +284,7 @@ function getRawTransaction(txid, blockhash) {
 		if (coins[config.coin].genesisCoinbaseTransactionIdsByNetwork[global.activeBlockchain] && txid == coins[config.coin].genesisCoinbaseTransactionIdsByNetwork[global.activeBlockchain]) {
 			// copy the "confirmations" field from genesis block to the genesis-coinbase tx
 			getBlockchainInfo().then(function(blockchainInfoResult) {
-				var result = coins[config.coin].genesisCoinbaseTransactionsByNetwork[global.activeBlockchain];
+				let result = coins[config.coin].genesisCoinbaseTransactionsByNetwork[global.activeBlockchain];
 				result.confirmations = blockchainInfoResult.blocks;
 
 				// hack: default regtest node returns "0" for number of blocks, despite including a genesis block;
@@ -293,10 +300,15 @@ function getRawTransaction(txid, blockhash) {
 			});
 
 		} else {
-			var extra_params = blockhash ? [ blockhash ] : [];
+			let extra_params = blockhash ? [ blockhash ] : [];
 			getRpcDataWithParams({method:"getrawtransaction", parameters:[txid, 1, ...extra_params]}).then(function(result) {
 				if (result == null || result.code && result.code < 0) {
-					return Promise.reject(result);
+					// Always reject with a real Error instead of `null` / the raw RPC error
+					// payload, so upstream logging actually surfaces the failure (the
+					// previous `Promise.reject(result)` with a null result was getting
+					// silently dropped by `awaitPromises`' `if (x.reason)` filter).
+					let errMsg = `getrawtransaction returned ${result == null ? "null" : JSON.stringify(result)} for txid=${txid}${blockhash ? " blockhash=" + blockhash : ""}`;
+					return Promise.reject(new Error(errMsg));
 				}
 
 				resolve(result);
@@ -317,7 +329,7 @@ async function noTxIndexTransactionLookup(txid, walletOnly) {
 	// This is only available in Electrs and requires enabling BTCEXP_ELECTRUM_TXINDEX.
 	if (!walletOnly && (config.addressApi == "electrum" || config.addressApi == "electrumx") && config.electrumTxIndex) {
 		try {
-			var blockhash = await electrumAddressApi.lookupTxBlockHash(txid);
+			let blockhash = await electrumAddressApi.lookupTxBlockHash(txid);
 
 			return await getRawTransaction(txid, blockhash);
 
@@ -327,16 +339,16 @@ async function noTxIndexTransactionLookup(txid, walletOnly) {
 	}
 
 	// Try looking up in wallet transactions
-	for (var wallet of await listWallets()) {
+	for (let wallet of await listWallets()) {
 		try { return await getWalletTransaction(wallet, txid); }
 		catch (_) {}
 	}
 
 	// Try looking up in recent blocks
 	if (!walletOnly) {
-		var tip_height = await getRpcDataWithParams({method:"getblockcount", parameters:[]});
-		for (var height=tip_height; height>Math.max(tip_height - config.noTxIndexSearchDepth, 0); height--) {
-			var blockhash = await getRpcDataWithParams({method:"getblockhash", parameters:[height]});
+		let tip_height = await getRpcDataWithParams({method:"getblockcount", parameters:[]});
+		for (let height=tip_height; height>Math.max(tip_height - config.noTxIndexSearchDepth, 0); height--) {
+			let blockhash = await getRpcDataWithParams({method:"getblockhash", parameters:[height]});
 			try { return await getRawTransaction(txid, blockhash); }
 			catch (_) {}
 		}
@@ -383,9 +395,9 @@ function getUtxo(txid, outputIndex) {
 }
 
 function getMempoolTxDetails(txid, includeAncDec=true) {
-	var promises = [];
+	let promises = [];
 
-	var mempoolDetails = {};
+	let mempoolDetails = {};
 
 	promises.push(new Promise(function(resolve, reject) {
 		getRpcDataWithParams({method:"getmempoolentry", parameters:[txid]}).then(function(result) {
@@ -447,7 +459,7 @@ function getRpcMethodHelp(methodName) {
 
 
 function getRpcData(cmd, verifyingConnection=false) {
-	var startTime = new Date().getTime();
+	let startTime = new Date().getTime();
 
 	if (!verifyingConnection && !global.rpcConnected) {
 		return Promise.reject(new Error("No RPC connection available. Check your connection/authentication parameters."));
@@ -457,13 +469,16 @@ function getRpcData(cmd, verifyingConnection=false) {
 		debugLog(`RPC: ${cmd}`);
 
 		let rpcCall = async function(callback) {
-			var client = (cmd == "gettxoutsetinfo" ? global.rpcClientNoTimeout : global.rpcClient);
+			let client = (cmd == "gettxoutsetinfo" ? global.rpcClientNoTimeout : global.rpcClient);
 
 			try {
-				const result = await client.command(cmd);//, function(err, result, resHeaders) {
+				const rpcResult = await client.request(cmd, []);
+				const result = rpcResult.result;
+
+				//console.log(`RPC: request=${cmd}, result=${JSON.stringify(result)}`);
 
 				if (Array.isArray(result) && result.length == 1) {
-					var result0 = result[0];
+					let result0 = result[0];
 					
 					if (result0 && result0.name && result0.name == "RpcError") {
 						logStats(cmd, false, new Date().getTime() - startTime, false);
@@ -506,7 +521,7 @@ function getRpcData(cmd, verifyingConnection=false) {
 }
 
 function getRpcDataWithParams(request, verifyingConnection=false) {
-	var startTime = new Date().getTime();
+	let startTime = new Date().getTime();
 
 	if (!verifyingConnection && !global.rpcConnected) {
 		return Promise.reject(new Error("No RPC connection available. Check your connection/authentication parameters."));
@@ -516,11 +531,34 @@ function getRpcDataWithParams(request, verifyingConnection=false) {
 		debugLog(`RPC: ${JSON.stringify(request)}`);
 
 		let rpcCall = async function(callback) {
+			let client = (request.method == "gettxoutsetinfo" ? global.rpcClientNoTimeout : global.rpcClient);
+			
 			try {
-				const result = await global.rpcClient.command([request]);//, function(err, result, resHeaders) {
+				const rpcResult = await client.request(request.method, request.parameters);
+
+				// jayson resolves with `{result, error}` where exactly one is set.
+				// On a JSON-RPC error response (e.g. namecoind's `-4 "name expired"`)
+				// `result` is undefined; previously we just `resolve(undefined)` and
+				// the caller crashed downstream with cryptic
+				// `Cannot read properties of undefined (reading '...')` errors.
+				// Promote the error response to a real rejection so callers get a
+				// meaningful message and can branch on `err.code`.
+				if (rpcResult && rpcResult.error) {
+					const rpcErr = new Error(rpcResult.error.message || `RpcError: ${request.method}`);
+					rpcErr.code = rpcResult.error.code;
+					rpcErr.rpcMethod = request.method;
+					rpcErr.rpcParameters = request.parameters;
+					logStats(request.method, true, new Date().getTime() - startTime, false);
+					debugLog(`RpcErrorResponse: method=${request.method} code=${rpcResult.error.code} message=${rpcResult.error.message}`);
+					throw rpcErr;
+				}
+
+				const result = rpcResult.result;
+
+				//console.log(`RPC: request=${request}, result=${JSON.stringify(result)}`);
 
 				if (Array.isArray(result) && result.length == 1) {
-					var result0 = result[0];
+					let result0 = result[0];
 
 					if (result0 && result0.name && result0.name == "RpcError") {
 						logStats(request.method, true, new Date().getTime() - startTime, false);
@@ -539,7 +577,7 @@ function getRpcDataWithParams(request, verifyingConnection=false) {
 					throw new Error(`RpcError: type=errorResponse-04`);
 				}
 
-				resolve(result[0]);
+				resolve(result);
 
 				logStats(request.method, true, new Date().getTime() - startTime, true);
 
@@ -548,7 +586,14 @@ function getRpcDataWithParams(request, verifyingConnection=false) {
 			} catch (err) {
 				err.userData = {request:request};
 
-				utils.logError("RpcError-002", err, {request:`${request.method}${request.parameters ? ("(" + JSON.stringify(request.parameters) + ")") : ""}`});
+				// Log only the method name and the node's error code, not the
+				// parameter values: for name_show / name_history / getrawtransaction
+				// the parameters are the user's search input, and persisting them
+				// to disk alongside the error is a privacy leak (see
+				// explorelogs.txt). The full request object is still attached to
+				// err.userData for the in-process error page, which is shown only
+				// to the requester.
+				utils.logError("RpcError-002", err, {request:request.method, rpcErrorCode:(err && err.code)});
 
 				logStats(request.method, true, new Date().getTime() - startTime, false);
 

@@ -1,0 +1,51 @@
+extends layout
+
+block headContent
+	title Names filter \u2014 #{filterLabel}
+
+block content
+	+pageTitle(`Names filter: ${filterLabel}`)
+
+	if (userMessageMarkdown)
+		.alert.alert-danger
+			div!= userMessageMarkdown.replace(/`([^`]+)`/g, "<code>$1</code>")
+
+	if (filterDescription)
+		.alert.alert-info.small.mb-3
+			div= filterDescription
+
+	if (knownFilters && knownFilters.length)
+		.mb-3
+			span.text-muted.small.me-2 Other filters:
+			each f in knownFilters
+				if (f !== filter)
+					a.btn.btn-sm.btn-outline-secondary.me-2.mb-1(href=`./names/filter/${f}`)= f
+
+	if (namesSummaryPending && !namesSummary)
+		.alert.alert-warning.mb-3
+			div The name index is still being computed in the background. Filter results will appear once the first scan completes (typically within a minute on this node).
+
+	//- nmc-3.6.61: scope suffix is empty on the legacy render path (no new
+	//- locals), so the matches header is byte-identical to pre-3.6.61 there.
+	- var __scopeAllTime = (typeof filterScope != "undefined" && filterScope == "alltime")
+	+contentSection(`${matchedCount.toLocaleString()} match${matchedCount === 1 ? "" : "es"}${__scopeAllTime ? " (all time, active + expired)" : ""}`)
+		//- nmc-3.6.61: active vs all-time (active + expired) scope toggle,
+		//- shown once the 3.6.58 all-time pass has produced match lists.
+		if (typeof filterScope != "undefined" && filterAllTimeReady)
+			.mb-3
+				span.text-muted.small.me-2 Scope:
+				if (__scopeAllTime)
+					a.btn.btn-sm.btn-outline-secondary.me-2.mb-1(href=`./names/filter/${filter}`) active
+					span.btn.btn-sm.btn-secondary.me-2.mb-1 all time
+					if (filterAllTimeHeight != null)
+						span.text-muted.small as of block #{filterAllTimeHeight.toLocaleString()}
+				else
+					span.btn.btn-sm.btn-secondary.me-2.mb-1 active
+					a.btn.btn-sm.btn-outline-secondary.me-2.mb-1(href=`./names/filter/${filter}?scope=alltime`) all time
+
+		if (matchedNames.length === 0)
+			p.text-muted No matches.
+		else if (typeof nameTxPage != "undefined" && nameTxPage && nameTxPage.pageNames && nameTxPage.pageNames.length)
+			include ./includes/names-filter-txs.pug
+		else
+			include ./includes/names-filter-grid.pug

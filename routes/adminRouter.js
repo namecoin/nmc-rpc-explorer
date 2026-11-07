@@ -7,7 +7,6 @@ const fs = require('fs');
 const v8 = require('v8');
 
 const express = require('express');
-const csurf = require('csurf');
 const router = express.Router();
 const util = require('util');
 const moment = require('moment');
@@ -28,9 +27,24 @@ const addressApi = require("./../app/api/addressApi.js");
 const statTracker = require("./../app/statTracker.js");
 const appStats = require("./../app/appStats.js");
 
-const forceCsrf = csurf({ ignoreMethods: [] });
 
+// The whole /admin surface (dashboard, os-stats, heapdump, ...) exposes
+// operational internals: heap statistics, RPC stats, and — via
+// global.errorStats — the raw request paths and RPC parameters of every
+// user's recent errors. That is a cross-user privacy leak when served
+// without authentication, so gate the entire router behind the same
+// basic-auth flag the rest of the app uses. When no auth password is
+// configured (req.authenticated always undefined) the router is simply
+// unreachable, which is the safe default.
+router.use(function(req, res, next) {
+	if (!req.authenticated) {
+		res.status(401).send("Admin routes require authentication. Set an authentication password via the 'BTCEXP_BASIC_AUTH_PASSWORD' environment variable.");
 
+		return;
+	}
+
+	next();
+});
 
 
 router.get("/dashboard", function(req, res, next) {
@@ -40,22 +54,23 @@ router.get("/dashboard", function(req, res, next) {
 	res.locals.electrumStats = global.electrumStats;
 	res.locals.cacheStats = global.cacheStats;
 	res.locals.errorStats = global.errorStats;
+	res.locals.appEventStats = global.appEventStats;
 
 	res.locals.cacheSizes = {
 		misc: {
-			length: global.miscLruCache.length,
+			size: global.miscLruCache.size,
 			itemCount: global.miscLruCache.itemCount
 		},
 		block: {
-			length: global.blockLruCache.length,
+			size: global.blockLruCache.size,
 			itemCount: global.blockLruCache.itemCount
 		},
 		tx: {
-			length: global.txLruCache.length,
+			size: global.txLruCache.size,
 			itemCount: global.txLruCache.itemCount
 		},
 		mining: {
-			length: global.miningSummaryLruCache.length,
+			size: global.miningSummaryLruCache.size,
 			itemCount: global.miningSummaryLruCache.itemCount
 		}
 	};
@@ -139,7 +154,7 @@ router.get("/app-stats", function(req, res, next) {
 router.get('/resetUserSettings', (req, res) => {
 	req.session.userSettings = Object.create(null);
  
-	var userSettings = Object.create(null);
+	let userSettings = Object.create(null);
 	
 	res.cookie("user-settings", JSON.stringify(userSettings));
 
@@ -148,11 +163,18 @@ router.get('/resetUserSettings', (req, res) => {
 
 
 router.get('/heapdump', (req, res) => {
-	const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+	// Use req.ip (trust-proxy-aware) rather than the raw X-Forwarded-For
+	// header: a direct client on port 3002 can otherwise spoof
+	// "X-Forwarded-For: 127.0.0.1" and trigger a heap snapshot that
+	// contains RPC credentials, the cookie secret, and the basic-auth
+	// password. The router-level auth gate above is the primary barrier;
+	// this loopback check is defense-in-depth for operators who run the
+	// explorer without basic-auth on a trusted network.
+	const ip = req.ip;
 
 	debugLog(`Heap dump requested by IP ${ip}...`);
 
-	if (ip == "127.0.0.1") {
+	if (ip == "127.0.0.1" || ip == "::1" || ip == "::ffff:127.0.0.1") {
 		const filename = `./heapDump-${Date.now()}.heapsnapshot`;
 		const heapdumpStream = v8.getHeapSnapshot();
 		const fileStream = fs.createWriteStream(filename);
@@ -161,7 +183,11 @@ router.get('/heapdump', (req, res) => {
 		debugLog("Heap dump at startup written to", filename);
 
 		res.status(200).send({msg: "successfully took a heap dump"});
+
+		return;
 	}
+
+	res.status(403).end();
 });
 
 
