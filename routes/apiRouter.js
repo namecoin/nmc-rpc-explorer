@@ -4,7 +4,6 @@ const debug = require("debug");
 const debugLog = debug("btcexp:router");
 
 const express = require('express');
-const csurf = require('csurf');
 const router = express.Router();
 const util = require('util');
 const moment = require('moment');
@@ -15,25 +14,120 @@ const hexEnc = require("crypto-js/enc-hex");
 const { bech32, bech32m } = require("bech32");
 const Decimal = require("decimal.js");
 const asyncHandler = require("express-async-handler");
+const { rateLimit } = require("express-rate-limit");
 const markdown = require("markdown-it")();
 
-const utils = require('./../app/utils.js');
 const coins = require("./../app/coins.js");
 const config = require("./../app/config.js");
+const utils = require('./../app/utils.js');
 const coreApi = require("./../app/api/coreApi.js");
+const nameApi = require("./../app/api/nameApi.js");
+const backgroundTasks = require("./../app/backgroundTasks.js");
 const addressApi = require("./../app/api/addressApi.js");
 const xyzpubApi = require("./../app/api/xyzpubApi.js");
 const rpcApi = require("./../app/api/rpcApi.js");
 const apiDocs = require("./../docs/api.js");
 const btcQuotes = require("./../app/coins/btcQuotes.js");
 
-const forceCsrf = csurf({ ignoreMethods: [] });
+const broadcastRateLimiter = rateLimit({
+	windowMs: config.transactionBroadcast.rateLimitWindowMinutes * 60 * 1000,
+	limit: config.transactionBroadcast.rateLimitMaxRequests,
+	standardHeaders: "draft-7",
+	legacyHeaders: false,
+	handler: function(req, res) {
+		res.status(429).json({
+			success: false,
+			error: "Too many transaction broadcast attempts. Please try again later."
+		});
+	}
+});
+
+function broadcastRequestGuard(req, res, next) {
+	if (!req.is("application/json")) {
+		res.status(415).json({
+			success: false,
+			error: "Content-Type must be application/json."
+		});
+
+		return;
+	}
+
+	const fetchSite = req.get("sec-fetch-site");
+	if (fetchSite && fetchSite.toLowerCase() !== "same-origin") {
+		res.status(403).json({success: false, error: "Cross-origin transaction broadcasting is not allowed."});
+
+		return;
+	}
+
+	const origin = req.get("origin");
+	if (origin) {
+		try {
+			const requestOrigin = new URL(`${req.protocol}://${req.get("host")}`).origin;
+			if (new URL(origin).origin !== requestOrigin) {
+				res.status(403).json({success: false, error: "Cross-origin transaction broadcasting is not allowed."});
+
+				return;
+			}
+		} catch {
+			res.status(403).json({success: false, error: "Invalid request origin."});
+
+			return;
+		}
+	}
+
+	next();
+}
+
+function validateRawTransaction(rawTransaction) {
+	if (typeof rawTransaction !== "string") {
+		return {error: "rawTransaction must be a hexadecimal string."};
+	}
+
+	const normalizedHex = rawTransaction.trim();
+	const maxHexLength = config.transactionBroadcast.maxRawTransactionBytes * 2;
+
+	if (normalizedHex.length > maxHexLength) {
+		return {
+			status: 413,
+			error: `Raw transaction exceeds the ${config.transactionBroadcast.maxRawTransactionBytes.toLocaleString("en-US")}-byte limit.`
+		};
+	}
+
+	if (!/^[0-9a-fA-F]+$/.test(normalizedHex) || normalizedHex.length % 2 !== 0) {
+		return {error: "Raw transaction must be a non-empty, even-length hexadecimal string."};
+	}
+
+	if (normalizedHex.length < config.transactionBroadcast.minRawTransactionBytes * 2) {
+		return {error: "Raw transaction is too short to be valid."};
+	}
+
+	try {
+		const transaction = bitcoinjs.Transaction.fromHex(normalizedHex);
+		if (transaction.ins.length === 0 || transaction.outs.length === 0) {
+			return {error: "Raw transaction must contain at least one input and one output."};
+		}
+	} catch {
+		return {error: "Raw transaction hex could not be decoded."};
+	}
+
+	return {hex: normalizedHex.toLowerCase()};
+}
+
+function mempoolRejectionReason(acceptance) {
+	const reason = acceptance && acceptance["reject-reason"];
+	if (typeof reason === "string" && reason.trim()) {
+		return reason.replace(/[\r\n\t]+/g, " ").trim().substring(0, 300);
+	}
+
+	return "The node did not accept the transaction.";
+}
 
 
 
 
 router.get("/docs", function(req, res, next) {
 	res.locals.apiDocs = apiDocs;
+	res.locals.apiBaseUrl = apiDocs.baseUrl;
 	res.locals.route = req.query.route;
 
 	res.locals.categories = [];
@@ -73,11 +167,14 @@ router.get("/version", function(req, res, next) {
 
 /// BLOCKS
 
-router.get("/blocks/tip/height", asyncHandler(async (req, res, next) => {
+router.get("/blocks/tip", asyncHandler(async (req, res, next) => {
 	try {
-		const blockcount = await rpcApi.getBlockCount();
+		const getblockchaininfo = await coreApi.getBlockchainInfo();
 
-		res.send(blockcount.toString());
+		res.send({
+			height: getblockchaininfo.blocks,
+			hash: getblockchaininfo.bestblockhash
+		});
 
 	} catch (e) {
 		utils.logError("a39gfoeuew", e);
@@ -88,11 +185,21 @@ router.get("/blocks/tip/height", asyncHandler(async (req, res, next) => {
 	next();
 }));
 
-router.get("/blocks/tip/hash", function(req, res, next) {
-	coreApi.getBlockchainInfo().then(function(getblockchaininfo){
-		res.send(getblockchaininfo.bestblockhash.toString());
-	}).catch(next);
-});
+// undocumented, old url
+router.get("/blocks/tip/height", asyncHandler(async (req, res, next) => {
+	try {
+		const getblockchaininfo = await coreApi.getBlockchainInfo();
+
+		res.send(String(getblockchaininfo.blocks));
+
+	} catch (e) {
+		utils.logError("234508ehede", e);
+
+		res.json({success: false});
+	}
+
+	next();
+}));
 
 router.get("/block/:hashOrHeight", asyncHandler(async (req, res, next) => {
 	const hashOrHeight = req.params.hashOrHeight;
@@ -117,31 +224,128 @@ router.get("/block/:hashOrHeight", asyncHandler(async (req, res, next) => {
 	next();
 }));
 
+router.get("/block/header/:hashOrHeight", asyncHandler(async (req, res, next) => {
+	const hashOrHeight = req.params.hashOrHeight;
+	let hash = (hashOrHeight.length == 64 ? hashOrHeight : null);
+
+	try {
+		if (hash == null) {
+			hash = await coreApi.getBlockHashByHeight(parseInt(hashOrHeight));
+		}
+
+		const block = await coreApi.getBlockHeaderByHash(hash);
+
+		res.json(block);
+
+	} catch (e) {
+		utils.logError("w8kwqpoauns", e);
+
+		res.json({success: false});
+	}
+
+	next();
+}));
+
 
 
 
 /// TRANSACTIONS
 
-router.get("/tx/:txid", function(req, res, next) {
+router.post("/tx/broadcast", broadcastRateLimiter, broadcastRequestGuard, asyncHandler(async (req, res, next) => {
+	const validation = validateRawTransaction(req.body && req.body.rawTransaction);
+	if (validation.error) {
+		res.status(validation.status || 400).json({success: false, error: validation.error});
+
+		next();
+		return;
+	}
+
+	let acceptanceResults;
+	try {
+		acceptanceResults = await rpcApi.getRpcDataWithParams({
+			method: "testmempoolaccept",
+			parameters: [[validation.hex]]
+		});
+	} catch {
+		// RPC errors can include the full raw transaction and RPC credentials.
+		// Keep those values out of persistent logs and the in-memory error ledger.
+		utils.logError("broadcastTxValidation", new Error("testmempoolaccept RPC failed; sensitive details suppressed."));
+		res.status(502).json({
+			success: false,
+			error: "The node could not validate the transaction. Please try again later."
+		});
+
+		next();
+		return;
+	}
+
+	if (!Array.isArray(acceptanceResults) || acceptanceResults.length !== 1
+		|| !acceptanceResults[0] || typeof acceptanceResults[0].allowed !== "boolean") {
+		utils.logError("broadcastTxValidationResponse", new Error("Unexpected testmempoolaccept response."));
+		res.status(502).json({
+			success: false,
+			error: "The node returned an unexpected validation response."
+		});
+
+		next();
+		return;
+	}
+
+	const acceptance = acceptanceResults[0];
+	if (!acceptance.allowed) {
+		res.status(422).json({
+			success: false,
+			error: `Transaction validation failed: ${mempoolRejectionReason(acceptance)}`
+		});
+
+		next();
+		return;
+	}
+
+	try {
+		const txid = await rpcApi.getRpcDataWithParams({
+			method: "sendrawtransaction",
+			parameters: [validation.hex]
+		});
+
+		if (typeof txid !== "string" || !/^[0-9a-fA-F]{64}$/.test(txid)) {
+			utils.logError("broadcastTxResponse", new Error("Unexpected sendrawtransaction response."));
+			res.status(502).json({
+				success: false,
+				error: "The node returned an unexpected broadcast response."
+			});
+
+			next();
+			return;
+		}
+
+		res.json({success: true, txid: txid});
+	} catch {
+		utils.logError("broadcastTxSend", new Error("sendrawtransaction RPC failed; sensitive details suppressed."));
+		res.status(502).json({
+			success: false,
+			error: "The node could not broadcast the transaction. It may already be known or may no longer be valid."
+		});
+	}
+
+	next();
+}));
+
+router.get("/tx/:txid", asyncHandler(async (req, res, next) => {
 	let txid = utils.asHash(req.params.txid);
-
 	let promises = [];
-
 	let txInputLimit = (res.locals.crawlerBot) ? 3 : -1;
 
-	promises.push(coreApi.getRawTransactionsWithInputs([txid], txInputLimit));
-
-	Promise.all(promises).then(function(results) {
-		let outJson = results[0].transactions[0];
-		let txInputs = results[0].txInputsByTransaction[txid] || {};
+	try {
+		let results = await coreApi.getRawTransactionsWithInputs([txid], txInputLimit);
+		let outJson = results.transactions[0];
+		let txInputs = results.txInputsByTransaction[txid] || {};
 		
 		let inputBtc = 0;
 		if (txInputs[0]) {
 			for (let key in txInputs) {
 				let item = txInputs[key];
-
 				inputBtc += item["value"] * global.coinConfig.baseCurrencyUnit.multiplier;
-
 				outJson.vin[key].scriptSig.address = item.scriptPubKey.address;
 				outJson.vin[key].scriptSig.type = item.scriptPubKey.type;
 				outJson.vin[key].value = item.value;
@@ -150,8 +354,7 @@ router.get("/tx/:txid", function(req, res, next) {
 		
 		let outputBtc = 0;
 		for (let key in outJson.vout) {	
-			let item = outJson.vout[key];
-			
+			let item = outJson.vout[key];			
 			outputBtc += item.value * global.coinConfig.baseCurrencyUnit.multiplier;
 		}
 
@@ -160,24 +363,25 @@ router.get("/tx/:txid", function(req, res, next) {
 			"unit": "BTC"
 		};
 
+		if (outJson.confirmations == null) {
+			outJson.mempool = await coreApi.getMempoolTxDetails(txid, false);		
+		} 
+
 		if (global.specialTransactions && global.specialTransactions[txid]) {
 			let funInfo = global.specialTransactions[txid];
-
 			outJson.fun = funInfo;
 		}
 		
 		res.json(outJson);
-
-		next();
-
-	}).catch(function(err) {
+		
+	} catch(err) {
 		utils.logError("10328fwgdaqw", err);
-
 		res.json({success:false, error:err});
+	}
+	
+	next();
 
-		next();
-	});
-});
+}));
 
 router.get("/tx/volume/24h", function(req, res, next) {
 	try {
@@ -204,22 +408,33 @@ router.get("/tx/volume/24h", function(req, res, next) {
 
 /// BLOCKCHAIN
 
-router.get("/blockchain/coins", function(req, res, next) {	
+router.get("/blockchain/coins", asyncHandler(async (req, res, next) => {
 	if (global.utxoSetSummary) {
-		var supply = parseFloat(global.utxoSetSummary.total_amount).toString();
+		let supply = parseFloat(global.utxoSetSummary.total_amount).toString();
 
-		res.send(supply.toString());
+		res.send({
+			supply: supply.toString(),
+			type: "calculated"
+		});
 
 		next();
 
 	} else {
 		// estimated supply
-		coreApi.getBlockchainInfo().then(function(getblockchaininfo){
-			var estimatedSupply = utils.estimatedSupply(getblockchaininfo.blocks);
-			res.send(estimatedSupply.toString());
-		}).catch(next);
+
+		let getblockchaininfo = await coreApi.getBlockchainInfo();
+		let estimatedSupply = utils.estimatedSupply(getblockchaininfo.blocks);
+		let lastCheckpoint = coinConfig.utxoSetCheckpointsByNetwork[global.activeBlockchain];
+
+		res.send({
+			supply: estimatedSupply.toString(),
+			type: "estimated",
+			lastCheckpointHeight: lastCheckpoint.height
+		})
+
+		next();
 	}
-});
+}));
 
 router.get("/blockchain/utxo-set", asyncHandler(async (req, res, next) => {
 	const utxoSetSummary = await coreApi.getUtxoSetSummary(true, true);
@@ -227,6 +442,68 @@ router.get("/blockchain/utxo-set", asyncHandler(async (req, res, next) => {
 	res.json(utxoSetSummary);
 
 	next();
+}));
+
+router.get("/blockchain/next-halving", asyncHandler(async (req, res, next) => {
+	try {
+		const getblockchaininfo = await coreApi.getBlockchainInfo();
+
+		let promises = [];
+
+		res.locals.getblockchaininfo = getblockchaininfo;
+		res.locals.difficultyPeriod = parseInt(Math.floor(getblockchaininfo.blocks / coinConfig.difficultyAdjustmentBlockCount));
+
+		let blockHeights = [];
+		if (getblockchaininfo.blocks) {
+			for (let i = 0; i < 1; i++) {
+				blockHeights.push(getblockchaininfo.blocks - i);
+			}
+		} else if (global.activeBlockchain == "regtest") {
+			// hack: default regtest node returns getblockchaininfo.blocks=0, despite
+			// having a genesis block; hack this to display the genesis block
+			blockHeights.push(0);
+		}
+
+		promises.push(utils.timePromise("homepage.getBlockHeaderByHeight", async () => {
+			let h = coinConfig.difficultyAdjustmentBlockCount * res.locals.difficultyPeriod;
+			res.locals.difficultyPeriodFirstBlockHeader = await coreApi.getBlockHeaderByHeight(h);
+		}));
+
+		promises.push(utils.timePromise("homepage.getBlocksByHeight", async () => {
+			const latestBlocks = await coreApi.getBlocksByHeight(blockHeights);
+			
+			res.locals.latestBlocks = latestBlocks;
+		}));
+
+		await utils.awaitPromises(promises);
+
+
+		let nextHalvingData = utils.nextHalvingEstimates(res.locals.difficultyPeriodFirstBlockHeader, res.locals.latestBlocks[0]);
+
+		// timeAgo =  moment.duration(moment.utc(new Date()).diff(moment.utc(new Date())));
+		let timeAgo = moment.duration(moment.utc(nextHalvingData.nextHalvingDate).diff(moment.utc(new Date())));
+		let format = timeAgo.format();
+		let formatParts = format.split(",").map(x => x.trim());
+		formatParts = formatParts.map(x => { return x.startsWith("0 ") ? "" : x; }).filter(x => x.length > 0);
+
+		res.json({
+			nextHalvingIndex: nextHalvingData.nextHalvingIndex,
+			nextHalvingBlock: nextHalvingData.nextHalvingBlock,
+			nextHalvingSubsidy: coinConfig.blockRewardFunction(nextHalvingData.nextHalvingBlock, global.activeBlockchain),
+			blocksUntilNextHalving: nextHalvingData.blocksUntilNextHalving,
+			timeUntilNextHalving: formatParts.join(", "),
+			nextHalvingEstimatedDate: nextHalvingData.nextHalvingDate,
+		});
+
+		next();
+
+	} catch (e) {
+		utils.logError("013923hege3", e)
+		
+		res.json({success:false});
+
+		next();
+	}
 }));
 
 
@@ -237,14 +514,38 @@ router.get("/blockchain/utxo-set", asyncHandler(async (req, res, next) => {
 
 /// ADDRESSES
 
+// encountered huge volume of traffic requesting the balance for top address
+// here, from many different ips, the below page leads me to believe the addresses
+// are associated with malware and the public instance API is being abused to 
+// aid the malware - block the requests
+// ref: https://pberba.github.io/crypto/2024/09/14/malicious-browser-extension-genesis-market/
+const blacklistedAddresses = [
+	"bc1q4fkjqusxsgqzylcagra800cxljal82k6y3ejay",
+	"bc1qvmvz53hdauzxuhs7dkm775tlqtd9vpk8ux7mqj",
+	"bc1qtms60m4fxhp5v229kfxwd3xruu48c4a0tqwafu",
+	"bc1qvkvzfla6wrem2uf4ejkuja8yp3c6f3xf72kyc9",
+	"bc1qnxwt7sr3rqatd6efjyym3nsgxhslyzeqndhjpn"
+];
+
 router.get("/address/:address", asyncHandler(async (req, res, next) => {
 	try {
+		const address = utils.asAddress(req.params.address);
+
+		if (blacklistedAddresses.includes(address)) {
+			debugLog(`Blocking request: ip=${req.ip}, req=${req.originalUrl}`)
+			res.status(418).json({
+				message: "Teapot",
+			});
+
+			return;
+		}
+
 		const { perfId, perfResults } = utils.perfLogNewItem({action:"api.address"});
 		res.locals.perfId = perfId;
 
-		var limit = config.site.addressTxPageSize;
-		var offset = 0;
-		var sort = "desc";
+		let limit = config.site.addressTxPageSize;
+		let offset = 0;
+		let sort = "desc";
 
 		res.locals.maxTxOutputDisplayCount = config.site.addressPage.txOutputMaxDefaultDisplay;
 
@@ -261,8 +562,6 @@ router.get("/address/:address", asyncHandler(async (req, res, next) => {
 			sort = req.query.sort;
 		}
 
-
-		const address = utils.asAddress(req.params.address);
 
 		const transactions = [];
 		const addressApiSupport = addressApi.getCurrentAddressApiFeatureSupport();
@@ -329,7 +628,7 @@ router.get("/address/:address", asyncHandler(async (req, res, next) => {
 		}
 
 		if (global.miningPoolsConfigs) {
-			for (var i = 0; i < global.miningPoolsConfigs.length; i++) {
+			for (let i = 0; i < global.miningPoolsConfigs.length; i++) {
 				if (global.miningPoolsConfigs[i].payout_addresses[address]) {
 					let note = global.miningPoolsConfigs[i].payout_addresses[address];
 					note.type = "payout address for miner";
@@ -352,7 +651,7 @@ router.get("/address/:address", asyncHandler(async (req, res, next) => {
 
 		const promises = [];
 
-		var addrScripthash = hexEnc.stringify(sha256(hexEnc.parse(validateaddressResult.scriptPubKey)));
+		let addrScripthash = hexEnc.stringify(sha256(hexEnc.parse(validateaddressResult.scriptPubKey)));
 		addrScripthash = addrScripthash.match(/.{2}/g).reverse().join("");
 
 		result.electrumScripthash = addrScripthash;
@@ -360,7 +659,7 @@ router.get("/address/:address", asyncHandler(async (req, res, next) => {
 		promises.push(utils.timePromise("address.getAddressDetails", async () => {
 			const addressDetailsResult = await addressApi.getAddressDetails(address, validateaddressResult.scriptPubKey, sort, limit, offset);
 
-			var addressDetails = addressDetailsResult.addressDetails;
+			let addressDetails = addressDetailsResult.addressDetails;
 
 			result.txHistory = addressDetails;
 			result.txHistory.request = {};
@@ -380,6 +679,8 @@ router.get("/address/:address", asyncHandler(async (req, res, next) => {
 		next();
 
 	} catch (e) {
+		utils.logError("a39ehudsudese", e);
+
 		res.json({success:false});
 
 		next();
@@ -534,16 +835,16 @@ router.get("/xyzpub/addresses/:extendedPubkey", asyncHandler(async (req, res, ne
 
 router.get("/mining/hashrate", asyncHandler(async (req, res, next) => {
 	try {
-		var decimals = 3;
+		let decimals = 3;
 
 		if (req.query.decimals) {
 			decimals = parseInt(req.query.decimals);
 		}
 
-		var blocksPerDay = 24 * 60 * 60 / coinConfig.targetBlockTimeSeconds;
-		var rates = [];
+		let blocksPerDay = 24 * 60 * 60 / coinConfig.targetBlockTimeSeconds;
+		let rates = [];
 
-		var timePeriods = [
+		let timePeriods = [
 			1 * blocksPerDay,
 			7 * blocksPerDay,
 			30 * blocksPerDay,
@@ -551,16 +852,16 @@ router.get("/mining/hashrate", asyncHandler(async (req, res, next) => {
 			365 * blocksPerDay,
 		];
 
-		var promises = [];
+		let promises = [];
 
-		for (var i = 0; i < timePeriods.length; i++) {
+		for (let i = 0; i < timePeriods.length; i++) {
 			const index = i;
 			const x = timePeriods[i];
 
 			promises.push(new Promise(async (resolve, reject) => {
 				try {
 					const hashrate = await coreApi.getNetworkHashrate(x);
-					var summary = utils.formatLargeNumber(hashrate, decimals);
+					let summary = utils.formatLargeNumber(hashrate, decimals);
 					
 					rates[index] = {
 						val: parseFloat(summary[0]),
@@ -610,11 +911,11 @@ router.get("/mining/diff-adj-estimate", asyncHandler(async (req, res, next) => {
 	const { perfId, perfResults } = utils.perfLogNewItem({action:"api.diff-adj-estimate"});
 	res.locals.perfId = perfId;
 
-	var promises = [];
+	let promises = [];
 	const getblockchaininfo = await utils.timePromise("api_diffAdjEst_getBlockchainInfo", coreApi.getBlockchainInfo);
-	var currentBlock;
-	var difficultyPeriod = parseInt(Math.floor(getblockchaininfo.blocks / coinConfig.difficultyAdjustmentBlockCount));
-	var difficultyPeriodFirstBlockHeader;
+	let currentBlock;
+	let difficultyPeriod = parseInt(Math.floor(getblockchaininfo.blocks / coinConfig.difficultyAdjustmentBlockCount));
+	let difficultyPeriodFirstBlockHeader;
 	
 	promises.push(utils.timePromise("api.diff-adj-est.getBlockHeaderByHeight", async () => {
 		currentBlock = await coreApi.getBlockHeaderByHeight(getblockchaininfo.blocks);
@@ -627,29 +928,30 @@ router.get("/mining/diff-adj-estimate", asyncHandler(async (req, res, next) => {
 
 	await utils.awaitPromises(promises);
 	
-	var firstBlockHeader = difficultyPeriodFirstBlockHeader;
-	var heightDiff = currentBlock.height - firstBlockHeader.height;
-	var blockCount = heightDiff + 1;
-	var timeDiff = currentBlock.mediantime - firstBlockHeader.mediantime;
-	var timePerBlock = timeDiff / heightDiff;
-	var dt = new Date().getTime() / 1000 - firstBlockHeader.time;
-	var predictedBlockCount = dt / coinConfig.targetBlockTimeSeconds;
-	var timePerBlock2 = dt / heightDiff;
+	let firstBlockHeader = difficultyPeriodFirstBlockHeader;
+	let heightDiff = currentBlock.height - firstBlockHeader.height;
+	let blockCount = heightDiff + 1;
+	let timeDiff = currentBlock.mediantime - firstBlockHeader.mediantime;
+	let timePerBlock = timeDiff / heightDiff;
+	let dt = new Date().getTime() / 1000 - firstBlockHeader.time;
+	let predictedBlockCount = dt / coinConfig.targetBlockTimeSeconds;
+	let timePerBlock2 = dt / heightDiff;
 
-	var blockRatioPercent = new Decimal(blockCount / predictedBlockCount).times(100);
+	let blockRatioPercent = new Decimal(blockCount / predictedBlockCount).times(100);
 	if (blockRatioPercent > 400) {
 		blockRatioPercent = new Decimal(400);
 	}
 	if (blockRatioPercent < 25) {
 		blockRatioPercent = new Decimal(25);
 	}
-		
+	
+	let diffAdjPercent = 0;
 	if (predictedBlockCount > blockCount) {
-		var diffAdjPercent = new Decimal(100).minus(blockRatioPercent).times(-1);
+		diffAdjPercent = new Decimal(100).minus(blockRatioPercent).times(-1);
 		//diffAdjPercent = diffAdjPercent * -1;
 
 	} else {
-		var diffAdjPercent = blockRatioPercent.minus(new Decimal(100));
+		diffAdjPercent = blockRatioPercent.minus(new Decimal(100));
 	}
 	
 	res.send(diffAdjPercent.toFixed(2).toString());
@@ -773,40 +1075,176 @@ router.get("/mining/miner-summary", asyncHandler(async (req, res, next) => {
 
 
 
+/// NAMES (Namecoin)
+
+// Per-name lookup. Returns Namecoin Core's `name_show` payload, with a few
+// derived fields the explorer cares about (decoded value preview, namespace,
+// nostr identities embedded in the value, ifa-0001 imports).
+router.get("/name/:name", asyncHandler(async (req, res, next) => {
+	try {
+		const name = req.params.name;
+		const raw = await nameApi.nameShow(name);
+		if (!raw) {
+			res.status(404).json({ error: "name not found", name });
+			return next();
+		}
+		const valueRender = nameApi.renderNameValue(raw.value, raw.value_encoding);
+		let imports = [];
+		let identities = null;
+		let nameIdFields = [];
+		if (valueRender.kind === "json" && valueRender.parsed) {
+			imports = nameApi.collectAllImports(valueRender.parsed);
+			identities = nameApi.parseNostrIdentities(valueRender.parsed, name);
+			nameIdFields = nameApi.parseNameIdFields(valueRender.parsed);
+		}
+		res.json({
+			name: raw.name,
+			name_encoding: raw.name_encoding,
+			value: raw.value,
+			value_encoding: raw.value_encoding,
+			txid: raw.txid,
+			vout: raw.vout,
+			address: raw.address,
+			height: raw.height,
+			expires_in: raw.expires_in,
+			expired: raw.expired,
+			namespace: nameApi.splitNamespace(name),
+			valueParsed: valueRender.parsed || null,
+			valueKind: valueRender.kind,
+			imports,
+			identities,
+			nameIdFields,
+		});
+		next();
+	} catch (err) {
+		res.status(500).json({ error: err.message || String(err) });
+		next();
+	}
+}));
+
+// History of a single name. Wraps `name_history`. The full chain of
+// {op, value, height, txid} for the lifetime of the name.
+router.get("/name/:name/history", asyncHandler(async (req, res, next) => {
+	try {
+		const name = req.params.name;
+		const rows = await nameApi.nameHistory(name);
+		res.json(Array.isArray(rows) ? rows : []);
+		next();
+	} catch (err) {
+		res.status(500).json({ error: err.message || String(err) });
+		next();
+	}
+}));
+
+// Paginated name enumeration. Wraps `name_scan` start/count.
+router.get("/names", asyncHandler(async (req, res, next) => {
+	try {
+		const start = req.query.start || "";
+		const count = Math.min(parseInt(req.query.count || "50", 10) || 50, 500);
+		const prefix = req.query.prefix || null;
+		// Request nameEncoding/valueEncoding=utf8 so rows with non-ASCII bytes
+		// (é, Ω, emoji, CJK) come back as readable strings instead of
+		// `{name: null, name_encoding: "hex"}`. Binary values fall back to
+		// `value_encoding: "hex"` per-row.
+		const scanOpts = { nameEncoding: "utf8", valueEncoding: "utf8" };
+		if (prefix) scanOpts.prefix = prefix;
+		const params = [start, count, scanOpts];
+		const rows = await coreApi.tryRpcCmd ? null : null;
+		// Use nameApi's RPC pipe directly (mirrors /name/:name path).
+		let raw;
+		try {
+			raw = await require("./../app/api/rpcApi.js").getRpcDataWithParams({ method: "name_scan", parameters: params });
+		} catch (_e) {
+			// Pre-0.19 fallback: retry without options for old nodes that reject
+			// unknown option keys.
+			const legacyParams = [start, count];
+			if (prefix) legacyParams.push({ prefix });
+			raw = await require("./../app/api/rpcApi.js").getRpcDataWithParams({ method: "name_scan", parameters: legacyParams });
+		}
+		res.json((raw || []).map((r) => ({
+			name: r.name,
+			height: r.height,
+			txid: r.txid,
+			vout: r.vout,
+			address: r.address,
+			expires_in: r.expires_in,
+			expired: r.expired,
+			namespace: nameApi.splitNamespace(r.name),
+		})));
+		next();
+	} catch (err) {
+		res.status(500).json({ error: err.message || String(err) });
+		next();
+	}
+}));
+
+// Cached counts (active/expired/total + per-namespace) refreshed every 30 min.
+router.get("/names/summary", function (req, res, next) {
+	res.json({
+		namesSummary: global.namesSummary || null,
+		namesSummaryPending: !!global.namesSummaryPending,
+	});
+	next();
+});
+
+// Pending name operations in the mempool. Wraps `name_pending`.
+router.get("/names/pending", asyncHandler(async (req, res, next) => {
+	try {
+		const rows = await nameApi.namePending();
+		res.json(Array.isArray(rows) ? rows : []);
+		next();
+	} catch (err) {
+		res.status(500).json({ error: err.message || String(err) });
+		next();
+	}
+}));
+
+// Last-24h name vs currency tx breakdown.
+router.get("/names/tx-stats", function (req, res, next) {
+	res.json(global.nameTxStats || null);
+	next();
+});
+
+
 /// MEMPOOL
 
-router.get("/mempool/count", function(req, res, next) {
+router.get("/mempool/summary", function(req, res, next) {
 	coreApi.getMempoolInfo().then(function(info){
-		res.send(info.size.toString());
+		res.json(info);
 	}).catch(next);
 });
 
-router.get("/mempool/fees", function(req, res, next) {
-	var feeConfTargets = [1, 3, 6, 144];
-	coreApi.getSmartFeeEstimates("CONSERVATIVE", feeConfTargets).then(function(rawSmartFeeEstimates){
-		var smartFeeEstimates = {};
+router.get("/mempool/fees", asyncHandler(async (req, res, next) => {
+	let feeConfTargets = [1, 3, 6, 144];	
+	let rawSmartFeeEstimates = await coreApi.getSmartFeeEstimates("CONSERVATIVE", feeConfTargets);
+	let smartFeeEstimates = {};
+	
+	for (let i = 0; i < feeConfTargets.length; i++) {
+		let rawSmartFeeEstimate = rawSmartFeeEstimates[i];
+		if (rawSmartFeeEstimate.errors) {
+			smartFeeEstimates[feeConfTargets[i]] = "?";
+		} else {
+			smartFeeEstimates[feeConfTargets[i]] = parseInt(new Decimal(rawSmartFeeEstimate.feerate).times(coinConfig.baseCurrencyUnit.multiplier).dividedBy(1000));
+		}
+	}		
 		
-		for (var i = 0; i < feeConfTargets.length; i++) {
-			var rawSmartFeeEstimate = rawSmartFeeEstimates[i];
-			if (rawSmartFeeEstimate.errors) {
-				smartFeeEstimates[feeConfTargets[i]] = "?";
+	let results = {
+		"nextBlock":{"smart":smartFeeEstimates[1]},
+		"30min":smartFeeEstimates[3],
+		"60min":smartFeeEstimates[6],
+		"1day":smartFeeEstimates[144]
+	};
 
-			} else {
-				smartFeeEstimates[feeConfTargets[i]] = parseInt(new Decimal(rawSmartFeeEstimate.feerate).times(coinConfig.baseCurrencyUnit.multiplier).dividedBy(1000));
-			}
-		}		
-		
-		var results = {
-			"nextBlock":smartFeeEstimates[1],
-			"30min":smartFeeEstimates[3],
-			"60min":smartFeeEstimates[6],
-			"1day":smartFeeEstimates[144]
-		};
+	let nextBlockEstimate = await coreApi.getNextBlockEstimate();
+	if (nextBlockEstimate != undefined && nextBlockEstimate.minFeeRate != undefined) {
+		//console.log("nextBlockEstimate: " + JSON.stringify(nextBlockEstimate));
+		results.nextBlock.min = parseInt(nextBlockEstimate.minFeeRate);
+		results.nextBlock.max = parseInt(nextBlockEstimate.maxFeeRate);
+		results.nextBlock.median = parseInt(nextBlockEstimate.medianFeeRate);
+	}
 
-		res.json(results);
-
-	}).catch(next);
-});
+	res.json(results);
+}));
 
 
 
@@ -816,89 +1254,100 @@ router.get("/mempool/fees", function(req, res, next) {
 
 /// PRICE
 
-router.get("/price/:currency/sats", function(req, res, next) {
-	var result = 0;
-	var amount = 1.0;
-	var currency = req.params.currency.toLowerCase();
-	if (global.exchangeRates != null && global.exchangeRates[currency] != null) {
-		var satsRateData = utils.satoshisPerUnitOfLocalCurrency(currency);
-		result = satsRateData.amtRaw;
+const supportedCurrencies = ["usd", "eur", "gbp", "xau"];
+
+router.get("/price/sats", function(req, res, next) {
+	let result = {};
+	let amount = 1.0;
+
+	if (!global.exchangeRates) {
+		result.success = false;
+		result.error = "You have exchange-rate requests disabled (this is the default state; in your server configuration, you must set BTCEXP_NO_RATES to 'false', and ensure that BTCEXP_PRIVACY_MODE is also still its default value of 'false')"
 	}
-	else if (currency == "xau" && global.exchangeRates != null && global.goldExchangeRates != null) {
-		var dec = new Decimal(amount);
-		dec = dec.times(global.exchangeRates.usd).dividedBy(global.goldExchangeRates.usd);
-		var satCurrencyType = global.currencyTypes["sat"];
-		var one = new Decimal(1);
-		dec = one.dividedBy(dec);
-		dec = dec.times(satCurrencyType.multiplier);
-		
-		result = dec.toFixed(0);
-	}
+
+	supportedCurrencies.forEach(currency => {
+		if (global.exchangeRates != null && global.exchangeRates[currency] != null) {
+			let satsRateData = utils.satoshisPerUnitOfLocalCurrency(currency);
+			result[currency] = satsRateData.amtRaw;
+
+		} else if (currency == "xau" && global.exchangeRates != null && global.goldExchangeRates != null) {
+			let dec = new Decimal(amount);
+			dec = dec.times(global.exchangeRates.usd).dividedBy(global.goldExchangeRates.usd);
+			let satCurrencyType = global.currencyTypes["sat"];
+			let one = new Decimal(1);
+			dec = one.dividedBy(dec);
+			dec = dec.times(satCurrencyType.multiplier);
+			
+			result[currency] = dec.toFixed(0);
+		}
+	});
 	
-	res.send(result.toString());
+	res.json(result);
+
 	next();
 });
 
-router.get("/price/:currency/marketcap", function(req, res, next) {
-	var result = 0;
+router.get("/price/marketcap", function(req, res, next) {
+	let result = 0;
+
+	if (!global.exchangeRates) {
+		result.success = false;
+		result.error = "You have exchange-rate requests disabled (this is the default state; in your server configuration, you must set BTCEXP_NO_RATES to 'false', and ensure that BTCEXP_PRIVACY_MODE is also still its default value of 'false')"
+	}
 	
 	coreApi.getBlockchainInfo().then(function(getblockchaininfo){
-		var estimatedSupply = utils.estimatedSupply(getblockchaininfo.blocks);
-		var price = 0;
+		let estimatedSupply = utils.estimatedSupply(getblockchaininfo.blocks);
+		let price = 0;
 
-		var amount = 1.0;
-		var currency = req.params.currency.toLowerCase();
-		if (global.exchangeRates != null && global.exchangeRates[currency] != null) {
-			var formatData = utils.formatExchangedCurrency(amount, currency);
-			price = parseFloat(formatData.valRaw).toFixed(2);
-		}
-		else if (currency == "xau" && global.exchangeRates != null && global.goldExchangeRates != null) {
-			var dec = new Decimal(amount);
-			dec = dec.times(global.exchangeRates.usd).dividedBy(global.goldExchangeRates.usd);
-			var exchangedAmt = parseFloat(Math.round(dec * 100) / 100).toFixed(2);
-			price = exchangedAmt;
-		}
-	
-		result = estimatedSupply * price;
-		res.send(result.toFixed(2).toString());
+		let amount = 1.0;
+		let result = {};
+
+		supportedCurrencies.forEach(currency => {
+			if (global.exchangeRates != null && global.exchangeRates[currency] != null) {
+				let formatData = utils.formatExchangedCurrency(amount, currency);
+				price = parseFloat(formatData.valRaw).toFixed(2);
+
+			} else if (currency == "xau" && global.exchangeRates != null && global.goldExchangeRates != null) {
+				let dec = new Decimal(amount);
+				dec = dec.times(global.exchangeRates.usd).dividedBy(global.goldExchangeRates.usd);
+				let exchangedAmt = parseFloat(Math.round(dec * 100) / 100).toFixed(2);
+				price = exchangedAmt;
+			}
+		
+			result[currency] = estimatedSupply * price;
+		});
+
+		res.json(result);
+
 		next();
 
 	}).catch(next);
 });
 
-router.get("/price/:currency", function(req, res, next) {
-	var result = 0;
-	var amount = 1.0;
-	var currency = req.params.currency.toLowerCase();
+router.get("/price", function(req, res, next) {
+	let amount = 1.0;
+	let result = {};
+	let format = (req.query.format == "true");
 
-	if (global.exchangeRates != null && global.exchangeRates[currency] != null) {
-		var formatData = utils.formatExchangedCurrency(amount, currency);
-		result = formatData.val;
-	} else if (currency == "xau" && global.exchangeRates != null && global.goldExchangeRates != null) {
-		var dec = new Decimal(amount);
-		dec = dec.times(global.exchangeRates.usd).dividedBy(global.goldExchangeRates.usd);
-		var exchangedAmt = parseFloat(Math.round(dec * 100) / 100).toFixed(2);
-		result = utils.addThousandsSeparators(exchangedAmt);
+	if (!global.exchangeRates) {
+		result.success = false;
+		result.error = "You have exchange-rate requests disabled (this is the default state; in your server configuration, you must set BTCEXP_NO_RATES to 'false', and ensure that BTCEXP_PRIVACY_MODE is also still its default value of 'false')"
 	}
 	
-	res.send(result.toString());
-
-	next();
-});
-
-router.get("/price", function(req, res, next) {
-	var amount = 1.0;
-	var result = {};
-
-	["usd", "eur", "gbp", "xau"].forEach(currency => {
+	supportedCurrencies.forEach(currency => {
 		if (global.exchangeRates != null && global.exchangeRates[currency] != null) {
-			var formatData = utils.formatExchangedCurrency(amount, currency);
-			result[currency] = formatData.val;
+			let formatData = utils.formatExchangedCurrency(amount, currency);
 
+			if (format) {
+				result[currency] = formatData.val;
+
+			} else {
+				result[currency] = formatData.valRaw;
+			}
 		} else if (currency == "xau" && global.exchangeRates != null && global.goldExchangeRates != null) {
-			var dec = new Decimal(amount);
+			let dec = new Decimal(amount);
 			dec = dec.times(global.exchangeRates.usd).dividedBy(global.goldExchangeRates.usd);
-			var exchangedAmt = parseFloat(Math.round(dec * 100) / 100).toFixed(2);
+			let exchangedAmt = parseFloat(Math.round(dec * 100) / 100).toFixed(2);
 			result[currency] = utils.addThousandsSeparators(exchangedAmt);
 		}
 	});
@@ -915,9 +1364,19 @@ router.get("/price", function(req, res, next) {
 /// FUN
 
 router.get("/quotes/random", function(req, res, next) {
-	var index = utils.randomInt(0, btcQuotes.items.length);
+	let index = utils.randomInt(0, btcQuotes.items.length);
+
+	let quote = null;
+	let done = false;
+
+	while (!done) {
+		let quoteIndex = utils.randomInt(0, btcQuotes.items.length);
+		quote = btcQuotes.items[quoteIndex];
+
+		done = !utils.objHasProperty(quote, "duplicateIndex");
+	}
 	
-	res.json(btcQuotes.items[index]);
+	res.json(quote);
 
 	next();
 });
@@ -988,5 +1447,95 @@ router.get("/holidays/:day", function(req, res, next) {
 	next();
 });
 
+
+// /api/health — minimal liveness probe (no RPC). Always 200, even if
+// namecoind is wedged. Useful behind a load balancer / monitor.
+router.get("/health", (req, res) => {
+	res.json({
+		ok: true,
+		ts: Date.now(),
+		uptime: process.uptime(),
+		appVersion: global.appVersion || null,
+		rpcConnected: !!global.rpcConnected,
+	});
+});
+
+// /api/background-tasks — JSON snapshot of all registered background
+// refreshers (last-run, last-error, next-run). Useful for /admin and
+// for ad-hoc "is the explorer healthy right now?" checks.
+router.get("/background-tasks", (req, res) => {
+	res.json({ tasks: backgroundTasks.list(), now: Date.now() });
+});
+
+// /api/metrics — Prometheus text exposition for the same. No external
+// prom-client dep — we hand-write the format, since we only emit a
+// dozen-ish gauges.  Designed to be scraped from localhost; if you
+// expose it externally, do so behind basic auth.
+router.get("/metrics", asyncHandler(async (req, res) => {
+	const lines = [];
+	const esc = (s) => String(s).replace(/[\\\"\n]/g, "_");
+
+	lines.push("# HELP nmcexplorer_up 1 if the explorer process is running.");
+	lines.push("# TYPE nmcexplorer_up gauge");
+	lines.push("nmcexplorer_up 1");
+
+	lines.push("# HELP nmcexplorer_uptime_seconds Process uptime.");
+	lines.push("# TYPE nmcexplorer_uptime_seconds counter");
+	lines.push(`nmcexplorer_uptime_seconds ${process.uptime().toFixed(3)}`);
+
+	lines.push("# HELP nmcexplorer_rpc_connected 1 if namecoind RPC is connected.");
+	lines.push("# TYPE nmcexplorer_rpc_connected gauge");
+	lines.push(`nmcexplorer_rpc_connected ${global.rpcConnected ? 1 : 0}`);
+
+	// Best-effort tip height
+	try {
+		const info = await coreApi.getBlockchainInfo();
+		if (info && typeof info.blocks === "number") {
+			lines.push("# HELP nmcexplorer_tip_height Current tip height as known by the node.");
+			lines.push("# TYPE nmcexplorer_tip_height gauge");
+			lines.push(`nmcexplorer_tip_height ${info.blocks}`);
+		}
+	} catch (_e) { /* leave it out */ }
+
+	// Best-effort mempool size
+	try {
+		const mp = await coreApi.getMempoolInfo();
+		if (mp && typeof mp.size === "number") {
+			lines.push("# HELP nmcexplorer_mempool_tx_count Current mempool transaction count.");
+			lines.push("# TYPE nmcexplorer_mempool_tx_count gauge");
+			lines.push(`nmcexplorer_mempool_tx_count ${mp.size}`);
+		}
+	} catch (_e) { /* leave it out */ }
+
+	// Per-task gauges. Each label = task id.
+	const tasks = backgroundTasks.list();
+	lines.push("# HELP nmcexplorer_bgtask_runs_total Total runs of a background refresher.");
+	lines.push("# TYPE nmcexplorer_bgtask_runs_total counter");
+	for (const t of tasks) lines.push(`nmcexplorer_bgtask_runs_total{task="${esc(t.id)}"} ${t.runs}`);
+
+	lines.push("# HELP nmcexplorer_bgtask_failures_total Total failed runs.");
+	lines.push("# TYPE nmcexplorer_bgtask_failures_total counter");
+	for (const t of tasks) lines.push(`nmcexplorer_bgtask_failures_total{task="${esc(t.id)}"} ${t.failures}`);
+
+	lines.push("# HELP nmcexplorer_bgtask_last_duration_ms Last run duration in ms.");
+	lines.push("# TYPE nmcexplorer_bgtask_last_duration_ms gauge");
+	for (const t of tasks) {
+		if (typeof t.lastDurationMs === "number") {
+			lines.push(`nmcexplorer_bgtask_last_duration_ms{task="${esc(t.id)}"} ${t.lastDurationMs}`);
+		}
+	}
+
+	lines.push("# HELP nmcexplorer_bgtask_seconds_since_success Seconds since the last successful run.");
+	lines.push("# TYPE nmcexplorer_bgtask_seconds_since_success gauge");
+	for (const t of tasks) {
+		if (typeof t.lastFinishedAt === "number" && t.lastError === null) {
+			const sec = Math.max(0, (Date.now() - t.lastFinishedAt) / 1000);
+			lines.push(`nmcexplorer_bgtask_seconds_since_success{task="${esc(t.id)}"} ${sec.toFixed(1)}`);
+		}
+	}
+
+	res.set("Content-Type", "text/plain; version=0.0.4");
+	res.send(lines.join("\n") + "\n");
+}));
 
 module.exports = router;
