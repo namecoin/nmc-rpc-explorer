@@ -63,6 +63,7 @@ debug.enable(process.env.DEBUG || debugDefaultCategories);
 
 
 global.cacheStats = {};
+global.appEventStats = {};
 
 
 
@@ -72,16 +73,18 @@ const logger = require('morgan');
 const cookieParser = require('cookie-parser');
 const bodyParser = require('body-parser');
 const session = require("express-session");
-const csurf = require("csurf");
+const MemoryStore = require('memorystore')(session);
+const csrfApi = require("csurf");
 const config = require("./app/config.js");
-const simpleGit = require('simple-git');
+const { simpleGit } = require('simple-git');
 const utils = require("./app/utils.js");
 const moment = require("moment");
 const Decimal = require('decimal.js');
-const bitcoinCore = require("btc-rpc-client");
 const pug = require("pug");
 const momentDurationFormat = require("moment-duration-format");
 const coreApi = require("./app/api/coreApi.js");
+const nameApi = require("./app/api/nameApi.js");
+const backgroundTasks = require("./app/backgroundTasks.js");
 const rpcApi = require("./app/api/rpcApi.js");
 const coins = require("./app/coins.js");
 const axios = require("axios");
@@ -95,17 +98,63 @@ const auth = require('./app/auth.js');
 const sso = require('./app/sso.js');
 const markdown = require("markdown-it")();
 const v8 = require("v8");
-var compression = require("compression");
+const compression = require("compression");
+const jayson = require('jayson/promise');
+const { rateLimit } = require("express-rate-limit");
+
 
 const appUtils = require("@janoside/app-utils");
 const s3Utils = appUtils.s3Utils;
 
 let cdnS3Bucket = null;
 if (config.cdn.active) {
-	cdnS3Bucket = s3Utils.createBucket(config.cdn.s3Bucket, config.cdn.s3BucketPath);
+	cdnS3Bucket = s3Utils.createBucket(config.cdn.s3Bucket, config.cdn.s3BucketRegion, config.cdn.s3BucketPath);
 }
 
 require("./app/currencies.js");
+
+// When running in non-BTC mode (e.g. Namecoin), the upstream `displayCurrency`
+// state machine still routes native amounts through the "btc" currency-type slot
+// (the lower-case key is the radio-button id stored in cookies, NOT the visible
+// label). Re-label that slot so views like blocks-list and tx-stats render
+// "NMC" alongside values instead of "BTC". The other native-unit aliases
+// ("sat") stay shared with Bitcoin since they're identical at the protocol level.
+//
+// We ALSO register a lowercase-ticker peer slot that points at the same data,
+// because some templates (e.g. index-network-summary.pug formatFees) re-look
+// up the currency type by `parts.currencyUnit.toLowerCase()` after we've
+// already renamed the `.name` field — without that peer slot the lookup
+// would return undefined and crash the homepage.
+if (process.env.BTCEXP_COIN && process.env.BTCEXP_COIN !== "BTC") {
+	const coins = require("./app/coins.js");
+	const activeCoinModule = coins[process.env.BTCEXP_COIN];
+	if (activeCoinModule && activeCoinModule.defaultCurrencyUnit && global.currencyTypes && global.currencyTypes.btc) {
+		const nativeName = activeCoinModule.defaultCurrencyUnit.name;
+		const nativeDp = activeCoinModule.defaultCurrencyUnit.decimalPlaces;
+		global.currencyTypes.btc.name = nativeName;
+		global.currencyTypes.btc.decimalPlaces = nativeDp;
+		global.currencyTypes[nativeName.toLowerCase()] = global.currencyTypes.btc;
+	}
+
+	// On Namecoin, retarget the "sat" small-unit slot to **Swartz**
+	// (1,000,000 per NMC, the user-friendly subdivision defined in
+	// app/coins/nmc.js). The cookie value stays "sat" so existing
+	// `displayCurrency == "sat"` checks across views keep working,
+	// but the visible label switches to "Swartz" everywhere it
+	// renders (the settings-cog button, the small-unit label next
+	// to amounts in the latest-blocks table, etc.). Done by name
+	// lookup so any coin that publishes a "swartz"-style mid-unit
+	// gets it; coins without one fall through unchanged.
+	if (activeCoinModule && Array.isArray(activeCoinModule.currencyUnits) && global.currencyTypes && global.currencyTypes.sat) {
+		const midUnit = activeCoinModule.currencyUnits.find(u => u && u.name && /^(swartz|finney|szabo|wei)$/i.test(u.name));
+		if (midUnit) {
+			global.currencyTypes.sat.name = midUnit.name;
+			global.currencyTypes.sat.multiplier = midUnit.multiplier;
+			global.currencyTypes.sat.decimalPlaces = midUnit.decimalPlaces;
+			global.currencyTypes[midUnit.name.toLowerCase()] = global.currencyTypes.sat;
+		}
+	}
+}
 
 const package_json = require('./package.json');
 global.appVersion = package_json.version;
@@ -115,6 +164,7 @@ debugLog(`Default cacheId '${global.cacheId}'`);
 global.btcNodeSemver = "0.0.0";
 
 
+const cleanupRouter = require('./routes/cleanupRouter.js');
 const baseActionsRouter = require('./routes/baseRouter.js');
 const internalApiActionsRouter = require('./routes/internalApiRouter.js');
 const apiActionsRouter = require('./routes/apiRouter.js');
@@ -201,19 +251,120 @@ if (process.env.BTCEXP_BASIC_AUTH_PASSWORD) {
 // uncomment after placing your favicon in /public
 //expressApp.use(favicon(__dirname + '/public/favicon.ico'));
 //expressApp.use(logger('dev'));
-expressApp.use(bodyParser.json());
+// Bound JSON input while allowing the 200,000 hex characters needed by a
+// maximum-size standard transaction submitted to /api/tx/broadcast.
+expressApp.use(bodyParser.json({limit: config.transactionBroadcast.jsonBodyLimit}));
 expressApp.use(bodyParser.urlencoded({ extended: false }));
-expressApp.use(session({
+
+
+const sessionConfig = {
 	secret: config.cookieSecret,
 	resave: false,
-	saveUninitialized: false
-}));
+	saveUninitialized: true,
+	cookie: {
+		secure: config.secureSite
+	}
+};
+
+// Always trust the loopback proxy so `req.ip` reflects the real client IP
+// when Apache/nginx forwards via 127.0.0.1 with X-Forwarded-For. Without
+// this, express-rate-limit (and any per-IP logic) lumps every reverse-
+// proxied request into a single 127.0.0.1 bucket, so one scanner hitting
+// /.env / /.aws/credentials / etc. exhausts the global window and every
+// legitimate user starts seeing "Too many requests". 'loopback' is safe
+// regardless of secureSite: only the literal 127.0.0.0/8 + ::1 hop is
+// trusted, so X-Forwarded-For headers from real external clients are
+// still ignored as spoofable.
+expressApp.set('trust proxy', 'loopback');
+
+// Onion-Location header: advertise this explorer's Tor onion mirror
+// (Tor Browser shows the purple ".onion available" pill in the URL bar
+// and offers a one-click switch). Validated at boot, applied per-request.
+// Skipped when the request itself is already on an .onion host so onion
+// visitors don't get a self-pointing header.
+if (config.onionLocation) {
+	const onionLocationRaw = String(config.onionLocation).trim();
+	const onionLocationOk = /^https?:\/\/[^\s"<>]+\.onion(:\d+)?(\/[^\s"<>]*)?$/i.test(onionLocationRaw);
+	if (!onionLocationOk) {
+		debugLog(`BTCEXP_ONION_LOCATION value rejected (must be http(s)://...onion[:port][/path]): ${onionLocationRaw}`);
+	} else {
+		debugLog(`Onion-Location header active: ${onionLocationRaw}`);
+		expressApp.use((req, res, next) => {
+			if (req.hostname && req.hostname.toLowerCase().endsWith(".onion")) {
+				return next();
+			}
+			res.setHeader("Onion-Location", onionLocationRaw);
+			next();
+		});
+	}
+}
+
+// Helpful reference for production: nginx HTTPS proxy:
+// https://gist.github.com/nikmartin/5902176
+debugLog(`Session config: ${JSON.stringify(utils.obfuscateProperties(sessionConfig, ["secret"]))}`);
+
+sessionConfig.store = new MemoryStore({
+	checkPeriod: 86400000 // prune expired entries every 24h
+});
+
+
+expressApp.use(session(sessionConfig));
 
 expressApp.use(compression());
 
 expressApp.use(config.baseUrl, express.static(path.join(__dirname, 'public'), {
 	maxAge: 30 * 24 * 60 * 60 * 1000
 }));
+
+
+// https://www.npmjs.com/package/express-rate-limit
+const rateLimitWindowMinutes = config.rateLimiting.windowMinutes;
+const rateLimitWindowMaxRequests = config.rateLimiting.windowMaxRequests;
+
+if (rateLimitWindowMinutes == -1) {
+	debugLog("Disabling rate limiting");
+
+} else {
+	debugLog(`Enabling rate limiting: ${rateLimitWindowMaxRequests} requests per ${rateLimitWindowMinutes}min`);
+
+	const rateLimiter = rateLimit({
+		windowMs: rateLimitWindowMinutes * 60 * 1000, // 15 minutes
+		limit: rateLimitWindowMaxRequests, // Limit each IP to 100 requests per `window` (here, per 15 minutes).
+		standardHeaders: 'draft-7', // draft-6: `RateLimit-*` headers; draft-7: combined `RateLimit` header
+		legacyHeaders: false, // Disable the `X-RateLimit-*` headers.
+		skip: function (req, res) {
+			// tor traffic all comes in via tor proxy showing 127.0.0.1
+			// for now, until we identify it as a serious problem, let it pass
+			if (req.hostname.includes(".onion")) {
+				utils.trackAppEvent("torRequest");
+
+				return true;
+			}
+
+			if (req.originalUrl.includes("/snippet/")) {
+				return true;
+			}
+
+			if (req.originalUrl.includes("/api/")) {
+				return true;
+			}
+
+			return false;
+		},
+		handler: function (req, res, next) {
+			debugErrorLog(`Rate-limiting request: req=${JSON.stringify(utils.expressRequestToJson(req))}`);
+
+			utils.trackAppEvent("rateLimitedRequest");
+
+			res.status(429).json({
+				message: "Too many requests, please try again later.",
+			});
+		}
+	});
+
+	// Apply the rate limiting middleware to all requests.
+	expressApp.use(rateLimiter);
+}
 
 
 if (config.baseUrl != '/') {
@@ -223,8 +374,9 @@ if (config.baseUrl != '/') {
 
 // if a CDN is configured, these assets will be uploaded at launch, then referenced from there
 const cdnItems = [
-	[`style/dark.css`, `text/css`, "utf8"],
-	[`style/light.css`, `text/css`, "utf8"],
+	[`style/dark.min.css`, `text/css`, "utf8"],
+	[`style/light.min.css`, `text/css`, "utf8"],
+	[`style/dark-v1.min.css`, `text/css`, "utf8"],
 	[`style/highlight.min.css`, `text/css`, "utf8"],
 	[`style/dataTables.bootstrap4.min.css`, `text/css`, "utf8"],
 	[`style/bootstrap-icons.css`, `text/css`, "utf8"],
@@ -233,7 +385,7 @@ const cdnItems = [
 	[`js/chart.min.js`, `text/javascript`, "utf8"],
 	[`js/jquery.min.js`, `text/javascript`, "utf8"],
 	[`js/site.js`, `text/javascript`, "utf8"],
-	[`js/highlight.pack.js`, `text/javascript`, "utf8"],
+	[`js/highlight.min.js`, `text/javascript`, "utf8"],
 	[`js/chartjs-adapter-moment.min.js`, `text/javascript`, "utf8"],
 	[`js/jquery.dataTables.min.js`, `text/javascript`, "utf8"],
 	[`js/dataTables.bootstrap4.min.js`, `text/javascript`, "utf8"],
@@ -350,6 +502,29 @@ function loadChangelog() {
 
 		} else {
 			global.apiChangelogMarkdown = data;
+		}
+	});
+
+	// Operator/user-facing doc: explains how the /name/<n> page builds
+	// name history (name_history RPC vs chain-walk reconstruction). Loaded
+	// once at boot and rendered by the /docs/name-history route.
+	fs.readFile(path.join(__dirname, "docs", "name-history.md"), 'utf8', function(err, data) {
+		if (err) {
+			utils.logError("loadNameHistoryDoc", err);
+		} else {
+			global.nameHistoryDocMarkdown = data;
+		}
+	});
+
+	// Background doc for the /nft page: step-by-step howto for pulling a
+	// file (e.g. nft/bitcoin-0.1.0.rar) out of the chain's name history and
+	// verifying it against the on-chain MD5/SHA. Rendered as Markdown inside
+	// a collapsible <details> on /nft.
+	fs.readFile(path.join(__dirname, "docs", "nft-files.md"), 'utf8', function(err, data) {
+		if (err) {
+			utils.logError("loadNftFilesDoc", err);
+		} else {
+			global.nftFilesDocMarkdown = data;
 		}
 	});
 }
@@ -515,20 +690,82 @@ async function onRpcConnectionVerified(getnetworkinfo, getblockchaininfo) {
 	refreshUtxoSetSummary();
 	setInterval(refreshUtxoSetSummary, 30 * 60 * 1000);
 
+	// Namecoin: register all the namecoin-specific background refreshers
+	// with the BackgroundTask registry so /metrics + /admin can surface
+	// last-run / failure / next-run for each one. Functional behaviour is
+	// unchanged from the bare setInterval pattern — just observable now.
+	backgroundTasks.register({
+		id: "namesSummary",
+		name: "Names summary (name_scan)",
+		description: "Walks name_scan every 30 min for active/expired counts + per-namespace breakdown.",
+		intervalMs: 30 * 60 * 1000,
+		disableEnv: "BTCEXP_DISABLE_NAMES_SUMMARY",
+		fn: refreshNamesSummary,
+	}).startSoon();
+
+	backgroundTasks.register({
+		id: "recentFirstUpdates",
+		name: "Recent firstupdates (~2016-block window)",
+		description: "Collects name_firstupdate ops in the last ~2 weeks for the 'New Names' section.",
+		intervalMs: 30 * 60 * 1000,
+		disableEnv: "BTCEXP_DISABLE_NAMES_SUMMARY",
+		fn: refreshRecentFirstUpdates,
+	}).startSoon();
+
+	backgroundTasks.register({
+		id: "oldestActiveNames",
+		name: "Oldest active names (full-chain scan)",
+		description: "Scans firstupdates oldest-first; early-exits when listCap actives are confirmed. Refreshed hourly.",
+		intervalMs: 60 * 60 * 1000,
+		disableEnv: "BTCEXP_DISABLE_NAMES_SUMMARY",
+		fn: refreshOldestActiveNames,
+	}).startSoon();
+
+	backgroundTasks.register({
+		id: "nameTxStats",
+		name: "Name-tx stats (last ~24h)",
+		description: "Counts name-op vs currency-only txs in the last 144 blocks for /tx-stats.",
+		intervalMs: 10 * 60 * 1000,
+		disableEnv: "BTCEXP_DISABLE_NAME_TX_STATS",
+		fn: refreshNameTxStats,
+	}).startSoon();
+
+	backgroundTasks.register({
+		id: "recentNameOps",
+		name: "Homepage recent name ops tile",
+		description: "Refreshes the homepage tile every 30s; /snippet/recent-name-ops just reads this cache.",
+		intervalMs: 30 * 1000,
+		disableEnv: "BTCEXP_DISABLE_RECENT_NAME_OPS",
+		fn: refreshRecentNameOps,
+	}).startSoon();
+
 
 
 	if (false) {
-		var zmq = require("zeromq");
-		var sock = zmq.socket("sub");
-
-		sock.connect("tcp://192.168.1.1:28333");
-		console.log("Worker connected to port 28333");
-
-		sock.on("message", function(topic, message) {
-			console.log(Buffer.from(topic).toString("ascii") + " - " + Buffer.from(message).toString("hex"));
-		});
+		monitorNewTransactions().catch(err => console.error(err));
 
 		//sock.subscribe('rawtx');
+	}
+}
+
+async function monitorNewTransactions() {
+	const zmq = require("zeromq");
+	const sock = new zmq.Subscriber();
+
+	sock.connect("tcp://ubuntu:28333");
+	console.log("Worker connected to port 28333");
+
+	// Subscribe to all topics (use sock.subscribe("specific_topic") for specific topics)
+	sock.subscribe();
+
+	for await (const [topic, message] of sock) {
+		utils.trackAppEvent("newTransaction");
+
+		console.log(
+			topic.toString("ascii") +
+			" - " +
+			message.toString("hex")
+		);
 	}
 }
 
@@ -627,24 +864,290 @@ async function assessTxindexAvailability() {
 	}
 }
 
+async function refreshNameTxStats() {
+	if (process.env.BTCEXP_DISABLE_NAME_TX_STATS === "true") {
+		debugLog("refreshNameTxStats disabled via BTCEXP_DISABLE_NAME_TX_STATS env var");
+		global.nameTxStats = null;
+		return;
+	}
+	try {
+		const chainInfo = await coreApi.getBlockchainInfo();
+		const tipHeight = chainInfo.blocks;
+		const windowSize = 144;
+		const startHeight = Math.max(0, tipHeight - windowSize + 1);
+		const startedAt = Date.now();
+		let totalTx = 0;
+		let nameTx = 0;
+		let currencyTxExcludingCoinbase = 0;
+		const opCounts = { name_new: 0, name_firstupdate: 0, name_update: 0 };
+		let earliestTime = null;
+		let latestTime = null;
+		for (let h = startHeight; h <= tipHeight; h++) {
+			let block;
+			try {
+				block = await coreApi.getBlockByHeight(h);
+			} catch (_e) {
+				continue;
+			}
+			if (!block || !Array.isArray(block.tx)) continue;
+			if (typeof block.time === "number") {
+				if (earliestTime === null || block.time < earliestTime) earliestTime = block.time;
+				if (latestTime === null || block.time > latestTime) latestTime = block.time;
+			}
+			for (const tx of block.tx) {
+				if (typeof tx === "string") { totalTx++; continue; }
+				totalTx++;
+				const txClass = nameApi.classifyNameTx(tx);
+				for (const op of txClass.nameOps) {
+					if (opCounts[op] !== undefined) opCounts[op]++;
+				}
+				if (txClass.hasNameOp) nameTx++;
+				if (txClass.isCurrencyExcludingCoinbase) currencyTxExcludingCoinbase++;
+			}
+		}
+		const elapsedMs = Date.now() - startedAt;
+		const windowSeconds = (earliestTime !== null && latestTime !== null) ? Math.max(latestTime - earliestTime, 1) : windowSize * 600;
+		global.nameTxStats = {
+			windowBlocks: windowSize,
+			windowStartHeight: startHeight,
+			windowEndHeight: tipHeight,
+			windowStartTime: earliestTime,
+			windowEndTime: latestTime,
+			windowSeconds,
+			totalTxCount: totalTx,
+			nameTxCount: nameTx,
+			currencyTxCount: Math.max(totalTx - nameTx, 0),
+			currencyTxExcludingCoinbaseCount: currencyTxExcludingCoinbase,
+			opCounts,
+			nameTxFraction: totalTx > 0 ? nameTx / totalTx : 0,
+			nameTxRate: nameTx / windowSeconds,
+			currencyTxRate: Math.max(totalTx - nameTx, 0) / windowSeconds,
+			currencyTxExcludingCoinbaseRate: currencyTxExcludingCoinbase / windowSeconds,
+			scannedAt: Date.now(),
+			elapsedMs,
+		};
+		debugLog(`Refreshed name-tx stats: ${nameTx}/${totalTx} name txs in last ${windowSize} blocks (${(global.nameTxStats.nameTxFraction * 100).toFixed(2)}%) in ${elapsedMs}ms`);
+	} catch (e) {
+		debugLog("refreshNameTxStats error: " + e.message);
+		global.nameTxStats = null;
+	}
+}
+
+// Refresh the homepage "Recent Name Operations" tile cache every 30s.
+// Decoupled from the per-request snippet so the homepage doesn't pay the
+// O(blocks × txs-in-block) `getRawTransactions` fan-out on every page
+// load. The /snippet/recent-name-ops endpoint just reads global.recentNameOps.
+async function refreshRecentNameOps() {
+	if (process.env.BTCEXP_DISABLE_RECENT_NAME_OPS === "true") {
+		global.recentNameOps = null;
+		return;
+	}
+	try {
+		const windowSize = Math.min(parseInt(process.env.BTCEXP_RECENT_NAME_OPS_BLOCKS || "6", 10) || 6, 24);
+		const limit = Math.min(parseInt(process.env.BTCEXP_RECENT_NAME_OPS_LIMIT || "15", 10) || 15, 50);
+		const startedAt = Date.now();
+
+		const tipInfo = await coreApi.getBlockchainInfo();
+		const heights = [];
+		for (let i = 0; i < windowSize; i++) heights.push(tipInfo.blocks - i);
+
+		const blocks = await coreApi.getBlocksByHeight(heights);
+		const txids = [];
+		const heightByTxid = new Map();
+		const toTxid = (entry) => (typeof entry === "string" ? entry : entry && entry.txid);
+		for (const b of blocks) {
+			if (!b || !Array.isArray(b.tx)) continue;
+			const blockHeight = (typeof b.height === "number") ? b.height : null;
+			for (let i = 1; i < b.tx.length && txids.length < 400; i++) {
+				const txid = toTxid(b.tx[i]);
+				if (txid) {
+					txids.push(txid);
+					if (blockHeight !== null && !heightByTxid.has(txid)) {
+						heightByTxid.set(txid, blockHeight);
+					}
+				}
+			}
+		}
+
+		const rawTxs = await coreApi.getRawTransactions(txids);
+		const opsAll = nameApi.collectNameOps(rawTxs);
+
+		let pendingAll = [];
+		try {
+			const raw = await nameApi.namePending();
+			if (Array.isArray(raw)) pendingAll = raw;
+		} catch (_e) { /* node may lack name_pending; that's fine */ }
+
+		let mempoolTxCount = null;
+		try {
+			const mp = await coreApi.getMempoolInfo();
+			if (mp && typeof mp.size === "number") mempoolTxCount = mp.size;
+		} catch (_e) { /* leave null */ }
+
+		global.recentNameOps = {
+			ops: opsAll.slice(0, limit).map((op) => ({
+				txid: op.txid, vout: op.vout, op: op.op, name: op.name,
+				valuePreview: op.value ? String(op.value).slice(0, 80) : null,
+				height: heightByTxid.has(op.txid) ? heightByTxid.get(op.txid) : null,
+			})),
+			pending: pendingAll.slice(0, limit).map((p) => ({
+				txid: p.txid, vout: p.vout, op: p.op, name: p.name || null,
+				valuePreview: p.value ? String(p.value).slice(0, 80) : null,
+				height: null,
+			})),
+			opsTotal: opsAll.length,
+			pendingTotal: pendingAll.length,
+			mempoolTxCount,
+			window: windowSize,
+			tip: tipInfo.blocks,
+			scannedAt: Date.now(),
+			elapsedMs: Date.now() - startedAt,
+		};
+	} catch (e) {
+		debugLog("refreshRecentNameOps error: " + e.message);
+		// Don't clobber the previous good cache on a transient failure — a
+		// stale 30-second-old payload is better than a blank tile.
+	}
+}
+
+async function refreshNamesSummary() {
+	// Note: this scan runs ONCE every 30 min in the background, never on the
+	// request path. We deliberately do NOT gate this on `slowDeviceMode` —
+	// the scan is the only way to surface a name count, and the cost is paid
+	// at most every 30 min. Operators who really want zero RPC cost can flip
+	// `BTCEXP_DISABLE_NAMES_SUMMARY=true`.
+	if (process.env.BTCEXP_DISABLE_NAMES_SUMMARY === "true") {
+		debugLog("refreshNamesSummary disabled via BTCEXP_DISABLE_NAMES_SUMMARY env var");
+		global.namesSummary = null;
+		return;
+	}
+	global.namesSummaryPending = true;
+	try {
+		// Optional env-var overrides for the expiry window thresholds. Both
+		// default to ~30 days (4320 blocks) when unset; operators wiring this
+		// up against a non-mainnet chain (faster blocks) can shrink the window
+		// without rebuilding.
+		const opts = {};
+		const expSoon = parseInt(process.env.BTCEXP_NAMES_EXPIRING_SOON_BLOCKS, 10);
+		if (Number.isFinite(expSoon) && expSoon > 0) opts.expiringSoonBlocks = expSoon;
+		const expRecent = parseInt(process.env.BTCEXP_NAMES_RECENTLY_EXPIRED_BLOCKS, 10);
+		if (Number.isFinite(expRecent) && expRecent > 0) opts.recentlyExpiredBlocks = expRecent;
+		// All-time filter pass cadence, in blocks (default 36,000; the pass
+		// fires when the tip has advanced that far since the last run, or
+		// when no run has ever completed). Operators on non-mainnet chains
+		// can shrink it here.
+		const atBlocks = parseInt(process.env.BTCEXP_NAMES_ALLTIME_FILTER_BLOCKS, 10);
+		if (Number.isFinite(atBlocks) && atBlocks > 0) opts.allTimeMinBlocks = atBlocks;
+		// The all-time filter pass is block-height-triggered, so the walk
+		// needs the current tip. Cheap and best-effort: without it the
+		// all-time pass is simply skipped this run.
+		try {
+			const chainInfo = await coreApi.getBlockchainInfo();
+			if (chainInfo && Number.isFinite(chainInfo.blocks)) opts.tipHeight = chainInfo.blocks;
+		} catch { /* leave tipHeight unset */ }
+		global.namesSummary = await nameApi.getNamesSummary(opts);
+		debugLog(`Refreshed names summary: total=${global.namesSummary.total} active=${global.namesSummary.active} expired=${global.namesSummary.expired} expiringSoon=${global.namesSummary.expiringSoonTotal} recentlyExpired=${global.namesSummary.recentlyExpiredTotal} elapsedMs=${global.namesSummary.elapsedMs}`);
+		if (global.namesSummary && global.namesSummary.filterAllTimeRefreshed) {
+			debugLog(`Refreshed all-time filter summary: height=${global.namesSummary.filterAllTimeHeight} total=${global.namesSummary.total} active=${global.namesSummary.active} expired=${global.namesSummary.expired} elapsedMs=${global.namesSummary.filterAllTimeElapsedMs}`);
+		}
+	} catch (e) {
+		debugLog("refreshNamesSummary error: " + e.message);
+		global.namesSummary = null;
+	} finally {
+		global.namesSummaryPending = false;
+	}
+}
+
+async function refreshRecentFirstUpdates() {
+	// Same env-var escape hatch as refreshNamesSummary: operators who don't
+	// want any background name walking can disable both with a single flag.
+	if (process.env.BTCEXP_DISABLE_NAMES_SUMMARY === "true") {
+		debugLog("refreshRecentFirstUpdates disabled via BTCEXP_DISABLE_NAMES_SUMMARY env var");
+		global.recentFirstUpdates = null;
+		return;
+	}
+	global.recentFirstUpdatesPending = true;
+	try {
+		// Window threshold defaults to 2016 blocks (matching the expiry
+		// sections). Operators on a non-mainnet chain (faster blocks) can
+		// override via BTCEXP_NAMES_RECENT_FIRSTUPDATE_BLOCKS without
+		// rebuilding.
+		const opts = {};
+		const win = parseInt(process.env.BTCEXP_NAMES_RECENT_FIRSTUPDATE_BLOCKS, 10);
+		if (Number.isFinite(win) && win > 0) opts.windowBlocks = win;
+		global.recentFirstUpdates = await nameApi.getRecentNameFirstUpdates(opts);
+		debugLog(`Refreshed recent firstupdates: total=${global.recentFirstUpdates.total} listed=${global.recentFirstUpdates.items.length} window=${global.recentFirstUpdates.windowBlocks} elapsedMs=${global.recentFirstUpdates.elapsedMs}`);
+	} catch (e) {
+		debugLog("refreshRecentFirstUpdates error: " + e.message);
+		global.recentFirstUpdates = null;
+	} finally {
+		global.recentFirstUpdatesPending = false;
+	}
+}
+
+async function refreshOldestActiveNames() {
+	// Same env-var escape hatch as refreshNamesSummary / refreshRecentFirstUpdates.
+	if (process.env.BTCEXP_DISABLE_NAMES_SUMMARY === "true") {
+		debugLog("refreshOldestActiveNames disabled via BTCEXP_DISABLE_NAMES_SUMMARY env var");
+		global.oldestActiveNames = null;
+		return;
+	}
+	global.oldestActiveNamesPending = true;
+	try {
+		// Defaults: scan the entire chain from genesis (windowBlocks=null) with
+		// listCap=50. The function early-exits as soon as listCap actives are
+		// confirmed (oldest-first), so the typical refresh cost is bounded by
+		// listCap regardless of chain height. All knobs env-overridable:
+		//   BTCEXP_NAMES_OLDEST_LOOKBACK_BLOCKS  — limit search to last N blocks (legacy)
+		//   BTCEXP_NAMES_OLDEST_FROM_HEIGHT      — explicit start height (overrides lookback)
+		//   BTCEXP_NAMES_OLDEST_LIST_CAP         — how many oldest-still-active to keep
+		//   BTCEXP_NAMES_OLDEST_BATCH_SIZE       — parallel block fetches per batch
+		const opts = {};
+		const win = parseInt(process.env.BTCEXP_NAMES_OLDEST_LOOKBACK_BLOCKS, 10);
+		if (Number.isFinite(win) && win > 0) opts.windowBlocks = win;
+		const from = parseInt(process.env.BTCEXP_NAMES_OLDEST_FROM_HEIGHT, 10);
+		if (Number.isFinite(from) && from >= 0) opts.fromHeight = from;
+		const cap = parseInt(process.env.BTCEXP_NAMES_OLDEST_LIST_CAP, 10);
+		if (Number.isFinite(cap) && cap > 0) opts.listCap = cap;
+		const batch = parseInt(process.env.BTCEXP_NAMES_OLDEST_BATCH_SIZE, 10);
+		if (Number.isFinite(batch) && batch > 0) opts.batchSize = batch;
+		global.oldestActiveNames = await nameApi.getOldestActiveNames(opts);
+		debugLog(`Refreshed oldest active names: candidates=${global.oldestActiveNames.totalCandidates} active=${global.oldestActiveNames.totalActive} listed=${global.oldestActiveNames.items.length} fromHeight=${global.oldestActiveNames.fromHeight} toHeight=${global.oldestActiveNames.toHeight} earlyExit=${global.oldestActiveNames.earlyExit} elapsedMs=${global.oldestActiveNames.elapsedMs}`);
+	} catch (e) {
+		debugLog("refreshOldestActiveNames error: " + e.message);
+		global.oldestActiveNames = null;
+	} finally {
+		global.oldestActiveNamesPending = false;
+	}
+}
+
 async function refreshUtxoSetSummary() {
+	// Even on slow-device-mode nodes WITHOUT coinstatsindex we do still want
+	// the UTXO summary populated — otherwise the on-disk file cache (used by
+	// the /utxo-set page when `global.utxoSetSummary` is null) ages out and
+	// the page silently shows hours-old data. The slow `gettxoutsetinfo`
+	// call (~88s on Namecoin without coinstatsindex) runs on the dedicated
+	// no-timeout RPC client off the request path, on a 30-min interval, so
+	// it doesn't affect interactive page loads. The original skip behaviour
+	// only made sense when the explorer had no other way to surface the data.
 	if (config.slowDeviceMode) {
 		if (!global.getindexinfo || !global.getindexinfo.coinstatsindex) {
-			global.utxoSetSummary = null;
-			global.utxoSetSummaryPending = false;
-
-			debugLog("Skipping performance-intensive task: fetch UTXO set summary. This is skipped due to the flag 'slowDeviceMode' which defaults to 'true' to protect slow nodes. Set this flag to 'false' to enjoy UTXO set summary details.");
-
-			return;
+			debugLog("refreshUtxoSetSummary: slowDeviceMode=true and no coinstatsindex; running anyway via no-timeout RPC client so the file cache stays fresh.");
+			// fall through to the refresh below
 		}
 	}
 
 	// flag that we're working on calculating UTXO details (to differentiate cases where we don't have the details and we're not going to try computing them)
 	global.utxoSetSummaryPending = true;
 
-	global.utxoSetSummary = await coreApi.getUtxoSetSummary(true, false);
-
-	debugLog("Refreshed utxo summary: " + JSON.stringify(global.utxoSetSummary));
+	try {
+		global.utxoSetSummary = await coreApi.getUtxoSetSummary(true, false);
+		debugLog("Refreshed utxo summary: lastUpdated=" + (global.utxoSetSummary && global.utxoSetSummary.lastUpdated));
+	} catch (e) {
+		utils.logError("refreshUtxoSetSummary failed", e);
+	} finally {
+		global.utxoSetSummaryPending = false;
+	}
 }
 
 function refreshNetworkVolumes() {
@@ -727,6 +1230,8 @@ expressApp.onStartup = async () => {
 	global.config = config;
 	global.coinConfig = coins[config.coin];
 	global.coinConfigs = coins;
+
+	global.SATS_PER_BTC = global.coinConfig.baseCurrencyUnit.multiplier;
 
 	global.specialTransactions = {};
 	global.specialBlocks = {};
@@ -851,11 +1356,21 @@ expressApp.onStartup = async () => {
 	}
 }
 
-expressApp.continueStartup = function() {
-	var rpcCred = config.credentials.rpc;
-	debugLog(`Connecting to RPC node at ${rpcCred.host}:${rpcCred.port}`);
+function connectToRpcServer() {
+	// reload credentials, the main "config.credentials.rpc" can be stale
+	// since the username/password can be sourced from the auth cookie
+	// which changes each startup of bitcoind
+	let credentialsForRpcConnect = config.credentials.loadFreshRpcCredentials();
 
-	var rpcClientProperties = {
+	debugLog(`RPC Credentials: ${JSON.stringify(utils.obfuscateProperties(credentialsForRpcConnect, ["password"]), null, 4)}`);
+
+	let rpcCred = credentialsForRpcConnect;
+	debugLog(`Connecting to RPC node at [${rpcCred.host}]:${rpcCred.port}`);
+
+	let usernamePassword = `${rpcCred.username}:${rpcCred.password}`;
+	let authorizationHeader = `Basic ${btoa(usernamePassword)}`; // basic auth header format (base64 of "username:password")
+
+	let rpcClientProperties = {
 		host: rpcCred.host,
 		port: rpcCred.port,
 		username: rpcCred.username,
@@ -863,17 +1378,45 @@ expressApp.continueStartup = function() {
 		timeout: rpcCred.timeout
 	};
 
-	global.rpcClient = new bitcoinCore(rpcClientProperties);
+	debugLog(`RPC Connection properties: ${JSON.stringify(utils.obfuscateProperties(rpcClientProperties, ["password"]), null, 4)}`);
 
-	var rpcClientNoTimeoutProperties = {
+	// add after logging to avoid logging base64'd credentials
+	rpcClientProperties.headers = {
+		"Authorization": authorizationHeader
+	};
+
+	// main RPC client
+	global.rpcClient = jayson.Client.http(rpcClientProperties);
+
+	let rpcClientNoTimeoutProperties = {
 		host: rpcCred.host,
 		port: rpcCred.port,
 		username: rpcCred.username,
 		password: rpcCred.password,
-		timeout: 0
+		timeout: 0,
+		headers: {
+			"Authorization": authorizationHeader
+		}
 	};
 
-	global.rpcClientNoTimeout = new bitcoinCore(rpcClientNoTimeoutProperties);
+	// no timeout RPC client, for long-running commands
+	global.rpcClientNoTimeout = jayson.Client.http(rpcClientNoTimeoutProperties);
+}
+
+expressApp.continueStartup = function() {
+	connectToRpcServer();
+
+	// if using cookie auth, watch for changes to the file and reconnect
+	if (config.credentials.rpc.authType == "cookie") {
+		debugLog(`RPC authentication is cookie based; watching for changes to the auth cookie file...`);
+
+		fs.watchFile(config.credentials.rpc.authCookieFilepath, (curr, prev) => {
+			debugLog(`RPC auth cookie change detected; attempting reconnect...`);
+
+			connectToRpcServer();
+		});
+	}
+
 
 	// default values - after we connect via RPC, we update these
 	global.txindexAvailable = false;
@@ -888,7 +1431,7 @@ expressApp.continueStartup = function() {
 
 
 	if (config.addressApi) {
-		var supportedAddressApis = addressApi.getSupportedAddressApis();
+		let supportedAddressApis = addressApi.getSupportedAddressApis();
 		if (!supportedAddressApis.includes(config.addressApi)) {
 			utils.logError("32907ghsd0ge", `Unrecognized value for BTCEXP_ADDRESS_API: '${config.addressApi}'. Valid options are: ${supportedAddressApis}`);
 		}
@@ -922,6 +1465,8 @@ expressApp.continueStartup = function() {
 };
 
 expressApp.use(function(req, res, next) {
+	utils.trackAppEvent("request");
+
 	req.startTime = Date.now();
 
 	next();
@@ -950,6 +1495,11 @@ expressApp.use(function(req, res, next) {
 	res.locals.exchangeRates = global.exchangeRates;
 	res.locals.utxoSetSummary = global.utxoSetSummary;
 	res.locals.utxoSetSummaryPending = global.utxoSetSummaryPending;
+	res.locals.namesSummary = global.namesSummary;
+	res.locals.namesSummaryPending = global.namesSummaryPending;
+	res.locals.recentFirstUpdates = global.recentFirstUpdates;
+	res.locals.recentFirstUpdatesPending = global.recentFirstUpdatesPending;
+	res.locals.nameTxStats = global.nameTxStats;
 	res.locals.networkVolume = global.networkVolume;
 	
 	res.locals.host = req.session.host;
@@ -1016,7 +1566,15 @@ expressApp.use(function(req, res, next) {
 	}
 
 
-	if (!global.rpcConnected) {
+	// /api/health, /api/metrics, /api/background-tasks must work even when
+	// the RPC node is unreachable — they're operator liveness probes.
+	// Everything else falls through to the no-RPC error page below.
+	const _path = req.path || "";
+	const _bypassNoRpc = _path === "/api/health"
+		|| _path === "/api/metrics"
+		|| _path === "/api/background-tasks";
+
+	if (!global.rpcConnected && !_bypassNoRpc) {
 		res.status(500);
 		res.render('error', {
 			errorType: "noRpcConnection"
@@ -1032,12 +1590,14 @@ expressApp.use(function(req, res, next) {
 	next();
 });
 
-expressApp.use(csurf(), (req, res, next) => {
+const csrfProtection = csrfApi();
+expressApp.use(csrfProtection, (req, res, next) => {
 	res.locals.csrfToken = req.csrfToken();
 
 	next();
 });
 
+expressApp.use(config.baseUrl, cleanupRouter);
 expressApp.use(config.baseUrl, baseActionsRouter);
 expressApp.use(config.baseUrl + 'internal-api/', internalApiActionsRouter);
 expressApp.use(config.baseUrl + 'api/', apiActionsRouter);
@@ -1069,6 +1629,8 @@ expressApp.use(function(req, res, next) {
 
 /// catch 404 and forwarding to error handler
 expressApp.use(function(req, res, next) {
+	utils.trackAppEvent("error404");
+
 	var err = new Error(`Not Found: ${req ? req.url : 'unknown url'}`);
 	err.status = 404;
 
@@ -1079,15 +1641,25 @@ expressApp.use(function(req, res, next) {
 
 const sharedErrorHandler = (req, err) => {
 	if (err && err.message && err.message.includes("Not Found")) {
-		const path = err.toString().substring(err.toString().lastIndexOf(" ") + 1);
+		// Log req.path (no query string) rather than the raw req.url baked
+		// into err.message: the query string is where user search input
+		// lives, and persisting it to disk alongside the visitor's IP and
+		// user-agent is a privacy leak (see explorelogs.txt). Truncate to
+		// bound log-line size against pathological paths.
+		const path = (req.path || "").substring(0, 120);
 		const userAgent = req.headers['user-agent'];
 		const crawler = utils.getCrawlerFromUserAgentString(userAgent);
-		const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress; 
+		// req.ip is trust-proxy-aware; the raw x-forwarded-for header is
+		// client-spoofable on direct-to-3002 requests and would let an
+		// attacker forge the IP attributed to their own probes.
+		const ip = req.ip;
 
 		const attributes = { path:path };
 
 		if (crawler) {
 			attributes.crawler = crawler;
+
+			utils.trackAppEvent("crawlRequest", 1, {"crawler": crawler});
 		}
 
 		debugErrorLog(`404 NotFound: path=${path}, ip=${ip}, userAgent=${userAgent} (crawler=${(crawler != null)}${crawler ? crawler : ""})`);
@@ -1150,7 +1722,7 @@ expressApp.locals.assetUrl = (path) => {
 
 // debug setting to skip js/css integrity checks
 const skipIntegrityChecks = false;
-const resourceIntegrityHashes = JSON.parse(fs.readFileSync(path.join(process.cwd(), "public/txt/resource-integrity.json")));
+const resourceIntegrityHashes = require("./app/resourceIntegrityHashes.js");
 
 expressApp.locals.assetIntegrity = (filename) => {
 	if (!skipIntegrityChecks && resourceIntegrityHashes[filename]) {

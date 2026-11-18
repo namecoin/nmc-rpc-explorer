@@ -8,6 +8,8 @@ const crypto = require('crypto');
 const url = require('url');
 const path = require('path');
 
+const apiDocs = require("../docs/api.js");
+
 let baseUrl = (process.env.BTCEXP_BASEURL || "/").trim();
 if (!baseUrl.startsWith("/")) {
 	baseUrl = "/" + baseUrl;
@@ -35,15 +37,6 @@ const currentCoin = process.env.BTCEXP_COIN || "BTC";
 
 const rpcCred = credentials.rpc;
 
-if (rpcCred.cookie && !rpcCred.username && !rpcCred.password && fs.existsSync(rpcCred.cookie)) {
-	console.log(`Loading RPC cookie file: ${rpcCred.cookie}`);
-	
-	[ rpcCred.username, rpcCred.password ] = fs.readFileSync(rpcCred.cookie).toString().split(':', 2);
-	
-	if (!rpcCred.password) {
-		throw new Error(`Cookie file ${rpcCred.cookie} in unexpected format`);
-	}
-}
 
 const cookieSecret = process.env.BTCEXP_COOKIE_SECRET
  || (rpcCred.password && crypto.createHmac('sha256', JSON.stringify(rpcCred))
@@ -95,8 +88,10 @@ const slowDeviceMode = (process.env.BTCEXP_SLOW_DEVICE_MODE.toLowerCase() == "tr
 module.exports = {
 	host: process.env.BTCEXP_HOST || "127.0.0.1",
 	port: process.env.PORT || process.env.BTCEXP_PORT || 3002,
+	secureSite: process.env.BTCEXP_SECURE_SITE == "true",
 
 	baseUrl: baseUrl,
+	apiBaseUrl: apiDocs.baseUrl,
 
 	coin: currentCoin,
 
@@ -124,14 +119,40 @@ module.exports = {
 	cdn: {
 		active: (cdnBaseUrl == "." ? false : true),
 		s3Bucket: process.env.BTCEXP_S3_BUCKET,
+		s3BucketRegion: process.env.BTCEXP_S3_BUCKET_REGION,
 		s3BucketPath: s3BucketPath,
 		baseUrl: cdnBaseUrl
 	},
 
+	rateLimiting: {
+		windowMinutes: process.env.BTCEXP_RATE_LIMIT_WINDOW_MINUTES || 15,
+		windowMaxRequests: process.env.BTCEXP_RATE_LIMIT_WINDOW_MAX_REQUESTS || 200
+	},
+
+	transactionBroadcast: {
+		rateLimitWindowMinutes: 15,
+		rateLimitMaxRequests: 10,
+		// A maximum-size standard transaction occupies 200,000 hex characters.
+		// Keep the global JSON envelope bounded while leaving room for that hex,
+		// its property name, and surrounding JSON whitespace.
+		jsonBodyLimit: "256kb",
+		maxRawTransactionBytes: 100000,
+		minRawTransactionBytes: 60
+	},
+
+	// Onion-Location header (Tor Browser ".onion available" pill).
+	// Set BTCEXP_ONION_LOCATION to the full onion URL of this explorer,
+	// e.g. http://abc...xyz.onion:8080/ -- Tor Browser will then show the
+	// purple ".onion available" suggestion in the URL bar on clearnet
+	// visits and offer a one-click switch to the onion mirror.
+	// Header is only emitted on responses to non-.onion requests, so onion
+	// visitors never see a self-pointing Onion-Location.
+	onionLocation: process.env.BTCEXP_ONION_LOCATION || null,
+
 	rpcBlacklist:
-	  process.env.BTCEXP_RPC_ALLOWALL.toLowerCase() == "true"  ? []
-	: process.env.BTCEXP_RPC_BLACKLIST ? process.env.BTCEXP_RPC_BLACKLIST.split(',').filter(Boolean)
-	: [
+		process.env.BTCEXP_RPC_ALLOWALL.toLowerCase() == "true"  ? []
+		: process.env.BTCEXP_RPC_BLACKLIST ? process.env.BTCEXP_RPC_BLACKLIST.split(',').filter(Boolean)
+		: [
 		"addnode",
 		"backupwallet",
 		"bumpfee",
@@ -201,6 +222,45 @@ module.exports = {
 		"walletlock",
 		"walletpassphrase",
 		"walletpassphrasechange",
+
+		// Namecoin name operations: on a node with hot wallets these can
+		// spend name-fee balance (name_new) and update/transfer names the
+		// wallet controls (name_firstupdate / name_update / name_autoregister).
+		// Never safe to expose via an unauthenticated web RPC terminal.
+		"name_new",
+		"name_firstupdate",
+		"name_update",
+		"name_autoregister",
+		"name_list",
+		"name_pending",
+
+		// Raw-transaction broadcast / construction: sendrawtransaction is the
+		// canonical "push a signed tx" vector; the PSBT/rawtx helpers are the
+		// construction pipeline that ends in a broadcast.
+		"sendrawtransaction",
+		"testmempoolaccept",
+		"createrawtransaction",
+		"fundrawtransaction",
+		"combinerawtransaction",
+		"decodepsbt",
+		"combinepsbt",
+		"finalizepsbt",
+		"utxoupdatepsbt",
+		"walletcreatefundedpsbt",
+		"walletprocesspsbt",
+
+		// Wallet lifecycle: loading/unloading arbitrary wallets by path is a
+		// filesystem-side-effect operation and must not be web-reachable.
+		"loadwallet",
+		"unloadwallet",
+
+		// Expensive scans / DoS vectors: gettxoutsetinfo is ~88s/call on a
+		// Namecoin node, scantxoutset and scanblocks are unbounded, and
+		// getblocktemplate ties up the miner's block-assembly path.
+		"gettxoutsetinfo",
+		"scantxoutset",
+		"scanblocks",
+		"getblocktemplate",
 	],
 
 	addressApi: process.env.BTCEXP_ADDRESS_API,
@@ -212,7 +272,14 @@ module.exports = {
 	site: {
 		hideInfoNotes: process.env.BTCEXP_UI_HIDE_INFO_NOTES,
 		homepage:{
-			recentBlocksCount: parseInt(process.env.BTCEXP_UI_HOME_PAGE_LATEST_BLOCKS_COUNT || (slowDeviceMode ? 5 : 10))
+			// Latest Blocks tile size. We default to 12 in BOTH modes — a 12-row
+			// table is the same vertical footprint as 10 rows on most displays
+			// and the cost is one extra getBlockByHeight + getBlocksStatsByHeight
+			// pair per homepage hit (cached 15 min). The previous upstream
+			// default of 5 in slow-device-mode was a 2018-era concession; with
+			// the in-memory LRU cache + ttlAutopurge fix, even slow nodes serve
+			// the homepage in <100ms steady-state.
+			recentBlocksCount: parseInt(process.env.BTCEXP_UI_HOME_PAGE_LATEST_BLOCKS_COUNT || 12)
 		},
 		blockTxPageSize: (slowDeviceMode ? 10 : 20),
 		addressTxPageSize: 10,
@@ -224,12 +291,18 @@ module.exports = {
 		},
 		valueDisplayMaxLargeDigits: 4,
 		prioritizedToolIdsList: [0, 10, 11, 9, 3, 4, 16, 12, 2, 5, 15, 1, 6, 7, 13, 8],
+		//- The "Fun" section (BTC Fun, Quotes, Holidays, Whitepaper Extractor) is
+		//- upstream Bitcoin-specific content. We keep the section slot present so
+		//- views/tools.pug and views/includes/tools-card.pug -- which hardcode
+		//- 5-section layouts like [[0,1],[2],[3,4]] -- don't index past the end
+		//- of the array. On non-BTC chains the section is rendered with an
+		//- empty `items` list, which the Tools dropdown / Tools card simply skip.
 		toolSections: [
 			{name: "Basics", items: [0, 2]},
-			{name: "Mempool", items: [4, 16, 5]},
-			{name: "Analysis", items: [9, 18, 10, 11, 12, 3]},
+			{name: "Mempool", items: [4, 16, 5, 22]},
+			{name: "Analysis", items: [9, 18, 10, 11, 12, 3, 20]},
 			{name: "Technical", items: [15, 6, 7, 1]},
-			{name: "Fun", items: [8, 17, 19, 13]},
+			{name: "Fun", items: (currentCoin === "BTC") ? [8, 17, 19, 13] : []},
 		]
 	},
 
@@ -255,18 +328,27 @@ module.exports = {
 	/* 11 */	{name:"Block Analysis", url:"./block-analysis", desc:"Summary analysis for all transactions in a block.", iconClass:"bi-chevron-double-down"},
 	/* 12 */	{name:"Difficulty History", url:"./difficulty-history", desc:"Details of difficulty changes over time.", iconClass:"bi-clock-history"},
 
-	/* 13 */	{name:"Whitepaper Extractor", url:"./bitcoin-whitepaper", desc:"Extract the Bitcoin whitepaper from data embedded within the blockchain.", iconClass:"bi-file-earmark-text"},
+	/* 13 */	{name:"Whitepaper Extractor", url:"./bitcoin-whitepaper", desc:`Extract the Bitcoin whitepaper from data embedded within the blockchain.`, iconClass:"bi-file-earmark-text"},
+	//- Whitepaper Extractor is Bitcoin-specific (the whitepaper is embedded in BTC chain data).
+	//- It is left in siteTools so /bitcoin-whitepaper still resolves on BTC mode, but is dropped
+	//- from the navigation toolSections above for non-BTC chains.
 	
 	/* 14 */	{name:"Predicted Blocks", url:"./predicted-blocks", desc:"View predicted future blocks based on the current mempool.", iconClass:"bi-arrow-right-circle"},
 
-	/* 15 */	{name:"API", url:"./api/docs", desc:"View docs for the public API.", iconClass:"bi-braces-asterisk"},
+	/* 15 */	{name:"API", url:`.${apiDocs.baseUrl}/docs`, desc:"View docs for the public API.", iconClass:"bi-braces-asterisk"},
 
-	/* 16 */	{name:"Next Block", url:"./next-block", desc:"View a prediction for the the next block, based on the current mempool.", iconClass:"bi-minecart-loaded"},
-	/* 17 */	{name:"Quotes", url:"./quotes", desc:"Curated list of Bitcoin-related quotes.", iconClass:"bi-chat-quote"},
+	/* 16 */	{name:"Next Block", url:"./next-block", desc:"View a prediction for the next block, based on the current mempool.", iconClass:"bi-minecart-loaded"},
+	/* 17 */	{name:"Quotes", url:"./quotes", desc:`Curated list of ${coins[currentCoin].name}-related quotes.`, iconClass:"bi-chat-quote"},
 
 	/* 18 */	{name:"UTXO Set", url:"./utxo-set", desc:"View the latest UTXO Set.", iconClass:"bi-list-columns"},
 
-	/* 19 */	{name:"Holidays", url:"./holidays", desc:"Curated list of Bitcoin 'Holidays'.", iconClass:"bi-calendar-heart"},
+	/* 19 */	{name:"Holidays", url:"./holidays", desc:`Curated list of ${coins[currentCoin].name} 'Holidays'.`, iconClass:"bi-calendar-heart"},
+
+	/* 20 */	{name:"Next Halving", url:"./next-halving", desc:"Estimated details about the next halving.", iconClass:"bi-square-half"},
+
+	/* 21 */	{name:"NFT Files", url:"./nft", desc:`Files stored on the ${coins[currentCoin].name} blockchain as chunked nft/* name updates. Includes a reconstruction howto.`, iconClass:"bi-archive"},
+
+	/* 22 */	{name:"Broadcast Transaction", url:"./broadcast", desc:`Validate and broadcast a signed raw ${coins[currentCoin].name} transaction.`, iconClass:"bi-broadcast"},
 	]
 };
 

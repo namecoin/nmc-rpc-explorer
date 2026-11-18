@@ -1,6 +1,10 @@
 {
     "coinbase_tags" : {
-        "/LUXOR/": {
+        "/terrapool.io/": {
+            "name": "Terra Pool",
+            "link": "https://terrapool.io"
+        },
+        "Luxor": {
             "name": "Luxor",
             "link": "https://mining.luxor.tech"
         },
@@ -13,16 +17,16 @@
             "link": "https://www.1thash.top"
         },
         "/BTC.COM/" : {
-            "name" : "BTC.com",
-            "link" : "https://pool.btc.com"
+            "name" : "CloverPool",
+            "link" : "https://cloverpool.com/"
         },
         "/BTC.com/" : {
-            "name" : "BTC.com",
-            "link" : "https://pool.btc.com"
+            "name" : "CloverPool",
+            "link" : "https://cloverpool.com/"
         },
         "BITFARMS": {
             "name": "Bitfarms",
-            "link": "https://www.bitarms.io/"
+            "link": "https://www.bitfarms.io/"
         },
         "/Huobi/": {
             "name": "Huobi.pool",
@@ -185,8 +189,8 @@
             "link" : "http://give-me-coins.com/"
         },
         "/slush/" : {
-           "name" : "SlushPool",
-           "link" : "https://slushpool.com/"
+           "name" : "Braiins Pool",
+           "link" : "https://braiins.com/pool"
         },
         "Mined by AntPool" : {
             "name" : "AntPool",
@@ -488,6 +492,10 @@
             "name" : "Binance Pool",
             "link" : "https://pool.binance.com/"
         },
+        "binance": {
+            "name" : "Binance Pool",
+            "link" : "https://pool.binance.com/"
+        },
         "/Mined in the USA by: /Minerium.com/" : {
             "name" : "Minerium",
             "link" : "https://www.minerium.com/"
@@ -546,7 +554,11 @@
         },
         "MARA Pool": {
             "name": "MARA Pool",
-            "link": "https://marapool.com"
+            "link": "https://www.mara.com/"
+        },
+        "MARA Made in USA": {
+            "name": "MARA Pool",
+            "link": "https://www.mara.com/"
         },
         "KuCoinPool": {
             "name": "KuCoinPool",
@@ -559,10 +571,42 @@
         "Entrustus" : {
             "name": "Entrust Charity Pool",
             "link": "pool.entustus.org"
+        },
+        "okminer.com/euz" : {
+            "name": "OKMINER",
+            "link": "https://okminer.com/"
+        },
+        "btccom" : {
+            "name" : "CloverPool",
+            "link" : "https://cloverpool.com/"
+        },
+        "btccomf" : {
+            "name" : "CloverPool",
+            "link" : "https://cloverpool.com/"
+        },
+        "/pegapool/" : {
+            "name" : "PEGA Pool",
+            "link" : "https://www.pega-pool.com"
+        },
+        "WhitePool" : {
+            "name" : "WhitePool",
+            "link" : ""
+        },
+        "BitFuFu" : {
+            "name" : "BitFuFuPool",
+            "link" : "https://www.bitfufu.com/pool"
         }
     },
     "payout_addresses" : {
         "1MkCDCzHpBsYQivp8MxjY5AkTGG1f2baoe": {
+            "name": "Luxor",
+            "link": "https://mining.luxor.tech"
+        },
+        "39bitUyBcUu3y3hRTtYprKbTp712t4ZWqK": {
+            "name": "Luxor",
+            "link": "https://mining.luxor.tech"
+        },
+        "1Mp82mJt6d8XzX8bN2GAkpDqBukiwLuKrA": {
             "name": "Luxor",
             "link": "https://mining.luxor.tech"
         },
@@ -615,12 +659,12 @@
             "link" : "https://polmine.pl/"
         },
         "1CK6KHY6MHgYvmRQ4PAafKYDrg1ejbH1cE" : {
-            "name" : "SlushPool",
-            "link" : "https://slushpool.com/"
+            "name" : "Braiins Pool",
+            "link" : "https://braiins.com/pool"
         },
         "1AqTMY7kmHZxBuLUR5wJjPFUvqGs23sesr" : {
-            "name" : "SlushPool",
-            "link" : "https://slushpool.com/"
+            "name" : "Braiins Pool",
+            "link" : "https://braiins.com/pool"
         },
         "1AcAj9p6zJn4xLXdvmdiuPCtY7YkBPTAJo" : {
             "name" : "BitFury",
@@ -663,6 +707,18 @@
             "link" : "https://www.hpt.com/"
         },
         "1BDbsWi3Mrcjp1wdop3PWFNCNZtu4R7Hjy" : {
+            "name" : "EMCDPool",
+            "link" : "https://pool.emcd.io"
+        },
+	    "1MAAUXNSJEDaPtECd955CQct65BmTzwhj6" : {
+            "name" : "EMCDPool",
+            "link" : "https://pool.emcd.io"
+        },
+        "3LwoXDToPiq2rBaQzoe2ZnaUvhGykFp2LM" : {
+            "name" : "EMCDPool",
+            "link" : "https://pool.emcd.io"
+        },
+        "15h4MFgMs3yGiGfXA7fqhpsTWMkQ95EFBB" : {
             "name" : "EMCDPool",
             "link" : "https://pool.emcd.io"
         },
@@ -819,24 +875,24 @@
             "link" : "http://patelsminingpool.com/"
         },
         "3NA8hsjfdgVkmmVS9moHmkZsVCoLxUkvvv" : {
-            "name" : "BTC.com",
-            "link" : "https://pool.btc.com"
+            "name" : "CloverPool",
+            "link" : "https://cloverpool.com/"
         },
         "34qkc2iac6RsyxZVfyE2S5U5WcRsbg2dpK" : {
-            "name" : "BTC.com",
-            "link" : "https://pool.btc.com"
+            "name" : "CloverPool",
+            "link" : "https://cloverpool.com/"
         },
         "3EhLZarJUNSfV6TWMZY1Nh5mi3FMsdHa5U" : {
-            "name" : "BTC.com",
-            "link" : "https://pool.btc.com"
+            "name" : "CloverPool",
+            "link" : "https://cloverpool.com/"
         },
         "bc1qjl8uwezzlech723lpnyuza0h2cdkvxvh54v3dn" : {
-            "name" : "BTC.com",
-            "link" : "https://pool.btc.com"
+            "name" : "CloverPool",
+            "link" : "https://cloverpool.com/"
         },
         "1Bf9sZvBHPFGVPX71WX2njhd1NXKv5y7v5" : {
-            "name" : "BTC.com",
-            "link" : "https://pool.btc.com"
+            "name" : "CloverPool",
+            "link" : "https://cloverpool.com/"
         },
         "18EPLvrs2UE11kWBB3ABS7Crwj5tTBYPoa" : {
             "name" : "GoGreenLight",
@@ -1003,6 +1059,10 @@
             "link" : "https://www.spiderpool.com/"
         },
         "125m2H43pwKpSZjLhMQHneuTwTJN5qRyYu": {
+            "name" : "SpiderPool",
+            "link" : "https://www.spiderpool.com/"
+        },
+        "1BM1sAcrfV6d4zPKytzziu4McLQDsFC2Qc": {
             "name" : "SpiderPool",
             "link" : "https://www.spiderpool.com/"
         },
@@ -1190,6 +1250,10 @@
             "name" : "Binance Pool",
             "link" : "https://pool.binance.com/"
         },
+        "bc1qzes26t5h05zpaan9rjcu8zhdvyfedu6927r9jv":{
+            "name" : "Binance Pool",
+            "link" : "https://pool.binance.com/"
+        },
         "34Jpa4Eu3ApoPVUKNTN2WeuXVVq1jzxgPi": {
             "name" : "Lubian.com",
             "link" : "http://www.lubian.com/"
@@ -1250,9 +1314,49 @@
             "name" : "ULTIMUS POOL",
             "link" : "https://www.ultimuspool.com/"
         },
+        "19VBqLkbMywnX5QMUg7LsHgbzsLh9as4MS": {
+            "name": "MARA Pool",
+            "link": "https://www.mara.com/"
+        },
         "1A32KFEX7JNPmU1PVjrtiXRrTQcesT3Nf1": {
             "name": "MARA Pool",
-            "link": "https://marapool.com"
+            "link": "https://www.mara.com/"
+        },
+        "15xcAZ2HfaSwYbCV6GGbasBSAekBRRC5Q2": {
+            "name": "OKMINER",
+            "link": "https://okminer.com/"
+        },
+        "3Qqp7LwxmSjPwRaKkDToysJsM3xA4ThqFk": {
+            "name": "Terra Pool",
+            "link": "https://terrapool.io"
+        },
+        "32P5KVSbZYAkVmSHxDd2oBXaSk372rbV7L": {
+            "name": "Terra Pool",
+            "link": "https://terrapool.io"
+        },
+        "36cWgjEtxQSFgbHTJDw5AB96ZX7fJk1URd" : {
+            "name" : "CloverPool",
+            "link" : "https://cloverpool.com/"
+        },
+        "1BGFwRzjCfRR7EvRHnzfHyFjGR8XiBDFKa" : {
+            "name" : "PEGA Pool",
+            "link" : "https://www.pega-pool.com/"
+        },
+        "3Awm3FNpmwrbvAFVThRUFqgpbVuqWisni9" : {
+            "name" : "SecPool",
+            "link" : "https://www.secpool.com"
+        },
+        "14VkxDwSAUWrzYTxV49HnYhKLWTJ3pCoUS" : {
+            "name" : "WhitePool",
+            "link" : ""
+        },
+        "37dvwZZoT3D7RXpTCpN2yKzMmNs2i2Fd1n" : {
+            "name" : "OCEAN",
+            "link" : "https://ocean.xyz/"
+        },
+        "3JP3zF7LoeoAotqkNGdvX5szUyNPwd937d" : {
+            "name" : "BitFuFuPool",
+            "link" : "https://www.bitfufu.com/pool"
         }
     }
 }

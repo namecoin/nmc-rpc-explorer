@@ -1,3 +1,9 @@
+- var displayedBlocks = blocks.filter((block, blockIndex) => block && ((sort == "desc" && (blockIndex < blocks.length - 1 || block.height == 0)) || (sort == "asc" && (block.height == 0 || blockIndex > 0))));
+- var cumulativePoissonValues = utils.cumulativePoissonData(displayedBlocks, sort);
+- var cumulativePoissonByHeight = {};
+each cumulativeBlock, cumulativeBlockIndex in displayedBlocks
+	- cumulativePoissonByHeight[cumulativeBlock.height] = cumulativePoissonValues[cumulativeBlockIndex];
+
 .table-responsive
 	table.table.table-borderless.table-striped.mb-0
 		thead
@@ -11,10 +17,20 @@
 					span.border-dotted(title="Timestamp of the block.", data-bs-toggle="tooltip") Time
 
 				th.text-end.text-card-highlight.fw-normal.text-uppercase Age
+
+				th.text-end.text-card-highlight.fw-normal.text-uppercase.d-none.d-sm-table-cell
+					span.border-dotted(title="<b>Poisson probability</b><br/>Probability that at least one block would have been mined within this block's actual time-to-mine (the gap to the previous block), given the target 10-minute interval: <code>P(N ≥ 1) = 1 − e<sup>−Δt/600s</sup></code>, where Δt is the inter-block gap. High percentages mean this block was 'overdue' relative to its predecessor; low percentages mean it arrived quickly.", data-bs-toggle="tooltip", data-bs-html="true") λ
+
+				th.text-end.text-card-highlight.fw-normal.text-uppercase.d-none.d-sm-table-cell
+					span.border-dotted(title="<b>Cumulative Poisson probability</b><br/>Probability that at least <code>k</code> blocks would have been mined since the oldest displayed block, given the target 10-minute interval: <code>λ = Δt/600s</code> and <code>P(N ≥ k) = 1 − e<sup>−λ</sup> Σ<sub>i=0</sub><sup>k−1</sup>(λ<sup>i</sup>/i!)</code>. Here <code>k</code> is the number of displayed inter-block intervals and Δt is their total elapsed time. Negative timestamp gaps count as 0 seconds. The oldest displayed block has no elapsed interval and is shown as N/A.", data-bs-toggle="tooltip", data-bs-html="true") Σλ
 				
 				th.text-end.text-card-highlight.fw-normal.text-uppercase.d-none.d-sm-table-cell
 					span.border-dotted(title="<b>Time To Mine</b><br/>The time it took to mine this block after the previous block. <span class='text-success'>Fast</span> blocks (< 5min) and <span class='text-danger'>Slow</span> blocks (> 15min) are highlighted.", data-bs-toggle="tooltip", data-bs-html="true") TTM
-				th.text-start.text-card-highlight.fw-normal.text-uppercase Miner
+				if (config.coin === "NMC")
+					th.text-start.text-card-highlight.fw-normal.text-uppercase
+						span.border-dotted(title="<b>Mining pool</b><br/>Namecoin is <b>merge-mined</b> with Bitcoin: the same hash that mines a Bitcoin block can simultaneously mine a Namecoin block, with no extra hashpower cost. The pool that mined the parent Bitcoin block also mined the NMC block, and its coinbase tag is preserved inside the <code>auxpow</code> blob carried in each NMC block header (<code>auxpow.tx.vin[0].coinbase</code>).<br/><br/>This column matches that parent-coinbase tag (and parent payout address) against the same pool registry the upstream Bitcoin explorer uses, then falls back to the NMC coinbase / NMC payout address. Hover any badge to see exactly which signal matched.", data-bs-toggle="tooltip", data-bs-html="true") Miner
+				else
+					th.text-start.text-card-highlight.fw-normal.text-uppercase Miner
 				th.text-end.text-card-highlight.fw-normal.text-uppercase
 					span.border-dotted(title="The number of transactions included in each block.", data-bs-toggle="tooltip") N(tx)
 
@@ -83,18 +99,50 @@
 
 						//if (!hideTimestampColumn)
 						td.text-end.d-none.d-md-table-cell
-							+timestamp(block.time, false, null)
+							+timestamp(block.time, {includeAgo:false})
 							
 
 						td.text-end
 
 							if (sort != "asc" && blockIndex == 0 && offset == 0 && timeAgoTime > (15 * 60 * 1000))
-								- var timeAgoTime = block.time;
 								span.text-danger.border-dotted(title="It's been > 15 min since this latest block.", data-bs-toggle="tooltip")
-									include ./time-ago-text.pug
+									+timeAgo(block.time, {outputCommas:false, agoText:false})
 							else
-								- var timeAgoTime = block.time;
-								include ./time-ago-text.pug
+								+timeAgo(block.time, {outputCommas:false, agoText:false})
+
+						td.text-end.d-none.d-sm-table-cell
+							//- Poisson CDF: P(N >= 1) = 1 - exp(-Δt/600s), where Δt is the
+							//- inter-block gap (this block's time minus the previous block's
+							//- time) and 600s is the Namecoin target block interval. Reads as
+							//- "probability at least one block should have been mined within
+							//- this gap". High % = block was overdue vs its predecessor.
+							if (timeDiff)
+								- var gapSeconds = Math.max(0, Math.floor(timeDiff.asSeconds()));
+								- var poissonP = 1 - Math.exp(-gapSeconds / 600);
+								- var poissonPct = (poissonP * 100).toFixed(1);
+								- var poissonClass = "";
+								if (poissonP >= 0.95)
+									- poissonClass = "text-danger";
+								else if (poissonP >= 0.80)
+									- poissonClass = "text-warning";
+								span(class=poissonClass, title=`Gap to previous block ${gapSeconds}s → P(N ≥ 1) = ${poissonPct}%`, data-bs-toggle="tooltip") #{poissonPct}%
+							else
+								if (block.height == 0)
+									small.border-dotted.text-muted(title="Not applicable: genesis block has no previous block to compare to.", data-bs-toggle="tooltip") N/A
+								else
+									small.border-dotted.text-muted(title="Not applicable: previous block is not in this page of results.", data-bs-toggle="tooltip") -
+
+						td.text-end.d-none.d-sm-table-cell
+							- var cumulativePoisson = cumulativePoissonByHeight[block.height];
+							if (cumulativePoisson)
+								- var cumulativePoissonPct = (cumulativePoisson.probability * 100).toFixed(1);
+								- var intervalNoun = cumulativePoisson.intervalCount == 1 ? "interval" : "intervals";
+								span.border-dotted(title=`Since oldest displayed block: ${cumulativePoisson.elapsedSeconds}s across ${cumulativePoisson.intervalCount} ${intervalNoun}; λ = ${cumulativePoisson.lambda.toFixed(6)}; P(N ≥ ${cumulativePoisson.intervalCount}) = ${cumulativePoissonPct}%`, data-bs-toggle="tooltip") #{cumulativePoissonPct}%
+							else
+								if (block.height == 0)
+									small.border-dotted.text-muted(title="Not applicable: genesis is the oldest displayed block, so no displayed inter-block interval has elapsed.", data-bs-toggle="tooltip") N/A (genesis)
+								else
+									small.border-dotted.text-muted(title="Not applicable: no cumulative value is available from the oldest displayed block.", data-bs-toggle="tooltip") N/A
 
 						td.text-end.d-none.d-sm-table-cell
 							if (timeDiff)
@@ -135,17 +183,24 @@
 
 								else
 									.d-inline.d-sm-none
-										span.badge.bg-primary(data-bs-toggle="tooltip", data-bs-html="true", title=`Identified by: ${block.miner.identifiedBy}${block.miner.note ? ("<br/><br/>" + block.miner.note) : ""}`) #{utils.ellipsize(block.miner.name, 12)}
+										span.badge.bg-primary(data-bs-toggle="tooltip", data-bs-html="true", title=`Identified by: ${block.miner.identifiedBy}`) #{utils.ellipsize(block.miner.name, 12)}
+
+										if (block.miner.note)
+											i.bi-asterisk.ms-2(data-bs-toggle="tooltip", title=block.miner.note)
 
 									.d-none.d-sm-inline
-										span.badge.bg-primary(data-bs-toggle="tooltip", data-bs-html="true", title=`Identified by: ${block.miner.identifiedBy}${block.miner.note ? ("<br/><br/>" + block.miner.note) : ""}`) #{utils.ellipsize(block.miner.name, 14)}
+										span.badge.bg-primary(data-bs-toggle="tooltip", data-bs-html="true", title=`Identified by: ${block.miner.identifiedBy}`) #{utils.ellipsize(block.miner.name, 14)}
+
+										if (block.miner.note)
+											i.bi-asterisk.ms-2(data-bs-toggle="tooltip", title=block.miner.note)
 
 							else if (block.height < global.pruneHeight)
 								span(title="This data is unavailable due to blockchain pruning", data-bs-toggle="tooltip")
 									i.bi-backspace.text-danger
 										
 							else
-								span.badge.bg-secondary Unknown
+								- var unknownTitle = (config.coin === "NMC") ? "No matching coinbase tag was found in either the Namecoin coinbase or the parent Bitcoin coinbase carried in the auxpow blob, and no payout address matched a known pool." : "No matching coinbase tag or payout address."
+								span.badge.bg-secondary(data-bs-toggle="tooltip", title=unknownTitle) Unknown
 
 						
 						td.text-end #{block.nTx.toLocaleString()}
@@ -154,11 +209,15 @@
 							td.text-end.d-none.d-lg-table-cell
 								if (blockstatsByHeight[block.height])
 									- var satValue = new Decimal(blockstatsByHeight[block.height].total_out).plus(blockstatsByHeight[block.height].subsidy).plus(blockstatsByHeight[block.height].totalfee);
-									- var currencyValue = parseInt(satValue.dividedBy(coinConfig.baseCurrencyUnit.multiplier));
-									- var currencyValueDecimals = 0;
+									//- Use the full-precision Decimal (in coin units) rather than truncating
+									//- to an integer. parseInt() previously dropped the fractional part, so a
+									//- single-coinbase Namecoin block at the post-halving 6.25 NMC reward
+									//- rendered as a flat "6 NMC".
+									- var currencyValue = satValue.dividedBy(coinConfig.baseCurrencyUnit.multiplier);
+									- var currencyValueDecimals = 4;
 
 									if (userSettings.displayCurrency == "btc")
-										+valueDisplaySpecial(currencyValue, 0)
+										+valueDisplaySpecial(currencyValue, currencyValueDecimals)
 
 									else
 										+valueDisplay(currencyValue)

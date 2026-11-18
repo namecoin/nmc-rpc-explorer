@@ -20,7 +20,7 @@ block content
 
 					+summaryItem("Date / Time")
 						if (block.time)
-							+timestamp(block.time)
+							+timestamp(block.time, {agoOptions:{oneElement:true}})
 
 						else
 							| ?
@@ -124,7 +124,7 @@ block content
 							
 							+summaryItem("Date / Time")
 								if (tx.time)
-									+timestamp(result.getrawtransaction.time)
+									+timestamp(result.getrawtransaction.time, {agoOptions:{oneElement:true}})
 										
 
 						if (isCoinbaseTx)
@@ -183,6 +183,60 @@ block content
 							- var dtDays = dt / 60 / 60 / 24;
 							- daysDestroyed = daysDestroyed.plus(new Decimal(vout.value).times(dtDays));
 
+				- var __nameOps = [];
+				if (tx.vout && tx.vout.length)
+					each __vout, __i in tx.vout
+						if (__vout.scriptPubKey && __vout.scriptPubKey.nameOp)
+							- __nameOps.push({ vout: __i, op: __vout.scriptPubKey.nameOp, value: __vout.value });
+
+				if (__nameOps.length)
+					+contentSection(`Name operation${__nameOps.length === 1 ? "" : "s"} (${__nameOps.length})`)
+						each __entry in __nameOps
+							- var __op = __entry.op;
+							- var __isNew = __op.op === "name_new";
+							.mb-3.pb-3(class=__entry === __nameOps[__nameOps.length - 1] ? "" : "border-bottom")
+								.row.g-2.mb-2
+									.col-md-3
+										div.text-muted.small Operation
+										div
+											case __op.op
+												when "name_new"
+													span.badge.bg-secondary name_new
+												when "name_firstupdate"
+													span.badge.bg-success name_firstupdate
+												when "name_update"
+													span.badge.bg-primary name_update
+												default
+													span.badge.bg-dark= __op.op
+									.col-md-3
+										div.text-muted.small Output
+										div #{__entry.vout} (#{__entry.value} NMC)
+									if (!__isNew)
+										.col-md-6
+											div.text-muted.small Name
+											div
+												a.font-monospace(href=utils.nameUrl(__op.name))= __op.name
+								if (__isNew)
+									.row.g-2
+										.col-12
+											div.text-muted.small Pre-image hash
+											div.font-monospace.small.text-break= __op.hash || __op.rand
+											div.text-muted.small.mt-1 The actual name is hidden until name_firstupdate is broadcast (anti-frontrunning commitment).
+								else
+									- var __valueText = __op.value || "";
+									- var __isJson = false;
+									- var __pretty = __valueText;
+									- try { var __parsed = JSON.parse(__valueText); __pretty = JSON.stringify(__parsed, null, 2); __isJson = (typeof __parsed === "object" && __parsed !== null); } catch (_e) {}
+									.row.g-2
+										.col-12
+											div.text-muted.small Value
+												span.ms-2.small= __isJson ? "(JSON)" : (__op.value_encoding || "text")
+											pre.bg-body-tertiary.p-2.rounded-1.small.mb-0.text-break
+												code= __pretty
+								if (__op.rand && !__isNew)
+									div.text-muted.small.mt-2 rand: 
+										code.small= __op.rand
+
 				+contentSection("Technical Details", true, "txPageShowTechDetails")
 					if (isTxConfirmed)
 						- var blockRewardMax = coinConfig.blockRewardFunction(result.getblock.height, activeBlockchain);
@@ -239,7 +293,7 @@ block content
 							- var daysDestroyedDesc = `The sum of all input values multiplied by the number of days that input's UTXO existed before being spent. Large values can sometimes be interesting, indicating the spending of long-dormant coins. A 1 ${coinConfig.ticker} UTXO spent after 7 days dormant results in 7 days destroyed, as does a 7 ${coinConfig.ticker} UTXO spent after 1 day dormant.`;
 							
 							+summaryItem("Days Destroyed", daysDestroyedDesc, `${coinConfig.ticker.toLowerCase().substring(0, 1)}d`, `${coinConfig.name} Days`)
-								| #{utils.addThousandsSeparators(daysDestroyed.toDP(daysDestroyed > 1 ? 0 : 1))}
+								| #{utils.addThousandsSeparators(daysDestroyed.toDP(1))}
 
 
 				
@@ -273,7 +327,9 @@ block content
 					if (result && result.getblock)
 						- blockHeight = result.getblock.height;
 
-					include includes/transaction-io-details.pug
+					- var totalIOValues = utils.getTxTotalInputOutputValues(tx, txInputs, blockHeight);
+
+					+txIoDetails(tx, txInputs, totalIOValues, blockHeight)
 						
 
 				if (mempoolDetails)
@@ -333,10 +389,20 @@ block content
 											.mb-2
 												+darkBadge("witness")
 
+											- var maxWitnessDisplayCount = 100;
 											each witnessItem, witnessIndex in vin.txinwitness
-												div(class=(witnessIndex > 0 ? "mt-2" : false))
-												+hexDataDisplay(witnessItem)
-												//.d-inline-block.small.border.rounded-1.p-1.px-2.card-highlight.word-wrap(class=(witnessIndex < (vin.txinwitness.length - 1) ? "mb-2" : false)) #{witnessItem}
+												if (witnessIndex < maxWitnessDisplayCount)
+													span.me-2(class=(witnessIndex > 0 ? "mt-2" : false))
+														span.text-tiny.text-muted.me-1 ##{witnessIndex.toLocaleString()}
+
+														if (witnessItem.length == 0)
+															span.text-muted.text-tiny (empty)
+														else
+															+hexDataDisplay(witnessItem)
+													//.d-inline-block.small.border.rounded-1.p-1.px-2.card-highlight.word-wrap(class=(witnessIndex < (vin.txinwitness.length - 1) ? "mb-2" : false)) #{witnessItem}
+
+											if (vin.txinwitness.length > maxWitnessDisplayCount)
+												span.text-muted.text-tiny.fw-bold (#{(vin.txinwitness.length - maxWitnessDisplayCount).toLocaleString()} more witness items)
 
 										
 						
@@ -380,38 +446,52 @@ block content
 
 
 			+pageTab("JSON")
-				- var pillTabs = ["Transaction", "Block Header", "UTXOs"];
-				if (mempoolDetails)
-					- pillTabs.push("Mempool Details");
-
-				+pillTabs(pillTabs)
-				
-				.tab-content
-					+pageTab("Transaction", true)
-						+contentSection("Transaction")
-							pre
-								code.text-json.json(data-lang="json") #{JSON.stringify(result.getrawtransaction, null, 4)}
-
-
-					+pageTab("Block Header")
-						+contentSection("Block Header")
-							pre
-								code.text-json.json(data-lang="json") #{JSON.stringify(result.getblock, null, 4)}
-
+				if (result.getrawtransaction.hex.length <= 50000)
+					- var pillTabs = ["Transaction"];
 					
-					+pageTab("UTXOs")
-						+contentSection("UTXOs")
-							pre
-								code.text-json.json(data-lang="json") #{JSON.stringify(utxos, null, 4)}
-								
+					if (!mempoolDetails)
+						- pillTabs.push("Block Header");
+
+					- pillTabs.push("UTXOs");
 
 					if (mempoolDetails)
-						+pageTab("Mempool Details")
-							+contentSection("Mempool Details")
-								pre
-									code.json(data-lang="json") #{JSON.stringify(mempoolDetails, null, 4)}
+						- pillTabs.push("Mempool Details");
 
-				//pre #{JSON.stringify(result.txInputs, null, 4)}
+					else
+
+					+pillTabs(pillTabs)
+					
+					.tab-content
+						+pageTab("Transaction", true)
+							+contentSection("Transaction")
+								pre
+									code.text-json.json(data-lang="json") #{JSON.stringify(result.getrawtransaction, null, 4)}
+
+
+						+pageTab("Block Header")
+							+contentSection("Block Header")
+								pre
+									code.text-json.json(data-lang="json") #{JSON.stringify(result.getblock, null, 4)}
+
+						
+						+pageTab("UTXOs")
+							+contentSection("UTXOs")
+								pre
+									code.text-json.json(data-lang="json") #{JSON.stringify(utxos, null, 4)}
+									
+
+						if (mempoolDetails)
+							+pageTab("Mempool Details")
+								+contentSection("Mempool Details")
+									pre
+										code.json(data-lang="json") #{JSON.stringify(mempoolDetails, null, 4)}
+
+					//pre #{JSON.stringify(result.txInputs, null, 4)}
+
+				else
+					span This transaction is very large. Displaying it's data here may cause problems. Instead, see it's raw data via the internal API:
+					br
+					a(href=`./api/tx/${txid}`) #{txid}
 
 		
 block endOfBody
